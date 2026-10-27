@@ -1018,7 +1018,11 @@ export class ZTTeamPublisherCron {
             include: { fb_account: true }
           }
         },
-        take: 30
+        orderBy: [
+          { last_views_checked_at: { sort: 'asc', nulls: 'first' } },
+          { posted_at: 'desc' }
+        ],
+        take: 100
       });
 
       // 2. Quét các bài Image có video_url đã đăng dưới dạng video/reel trong 7 ngày
@@ -1038,7 +1042,11 @@ export class ZTTeamPublisherCron {
             include: { fb_account: true }
           }
         },
-        take: 30
+        orderBy: [
+          { last_views_checked_at: { sort: 'asc', nulls: 'first' } },
+          { posted_at: 'desc' }
+        ],
+        take: 100
       });
 
       if (pendingReels.length === 0 && pendingVideoImages.length === 0) {
@@ -1178,7 +1186,39 @@ export class ZTTeamPublisherCron {
         });
       }
     } catch (e: any) {
-      this.logger.error(`Error processing view threshold for post ${item.fb_post_id}: ${e.message}`);
+      const errMessage = e.response?.data?.error?.message || e.message || '';
+      this.logger.error(`Error processing view threshold for post ${item.fb_post_id}: ${errMessage}`);
+
+      const isDeadPost =
+        errMessage.includes('does not exist') ||
+        errMessage.includes('cannot be loaded') ||
+        errMessage.includes('Missing Permissions') ||
+        e.response?.status === 400 ||
+        e.response?.status === 404;
+
+      const fallbackUpdate: any = {
+        last_views_checked_at: new Date(),
+      };
+      if (isDeadPost) {
+        fallbackUpdate.link_injected = true;
+        this.logger.warn(`[View-Based Link] Post ${item.fb_post_id} on page ${page.name} is inaccessible or deleted on Facebook (${errMessage}). Marked link_injected=true to release queue.`);
+      }
+
+      try {
+        if (type === 'reel') {
+          await this.prisma.ztteam_reels.update({
+            where: { id: item.id },
+            data: fallbackUpdate
+          });
+        } else {
+          await this.prisma.ztteam_images.update({
+            where: { id: item.id },
+            data: fallbackUpdate
+          });
+        }
+      } catch (dbErr: any) {
+        this.logger.error(`Failed to update fallback status for post ${item.fb_post_id}: ${dbErr.message}`);
+      }
     }
   }
 }

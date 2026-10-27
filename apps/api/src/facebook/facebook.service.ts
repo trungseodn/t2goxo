@@ -1678,7 +1678,7 @@ export class ZTTeamFacebookService {
           `https://graph.facebook.com/${this.API_VERSION}/${videoId}`,
           {
             params: {
-              fields: 'id,views,description,video_insights.metric(blue_reels_play_count){values}',
+              fields: 'id,views,description,video_insights.metric(blue_reels_play_count,fb_reels_total_plays){values}',
               access_token: page.page_token_encrypted,
             }
           }
@@ -1686,9 +1686,15 @@ export class ZTTeamFacebookService {
       );
       const data = response.data;
       const vViews = Number(data?.views) || 0;
-      const bluePlays = data?.video_insights?.data?.[0]?.values?.[0]?.value;
-      const vReach = typeof bluePlays === 'number' ? bluePlays : 0;
-      const totalViews = Math.max(vViews, vReach);
+      let bluePlays = 0;
+      let totalPlays = 0;
+      if (data?.video_insights?.data) {
+        for (const m of data.video_insights.data) {
+          if (m.name === 'blue_reels_play_count') bluePlays = m.values?.[0]?.value || 0;
+          if (m.name === 'fb_reels_total_plays') totalPlays = m.values?.[0]?.value || 0;
+        }
+      }
+      const totalViews = Math.max(vViews, bluePlays, totalPlays);
 
       return {
         views: totalViews,
@@ -1722,7 +1728,7 @@ export class ZTTeamFacebookService {
           `https://graph.facebook.com/${this.API_VERSION}/${page.fb_page_id}/videos`,
           {
             params: {
-              fields: 'id,views,description,video_insights.metric(blue_reels_play_count){values}',
+              fields: 'id,views,description,video_insights.metric(blue_reels_play_count,fb_reels_total_plays){values}',
               limit,
               access_token: page.page_token_encrypted,
             }
@@ -1732,10 +1738,16 @@ export class ZTTeamFacebookService {
       const videos = response.data?.data || [];
       for (const v of videos) {
         const vViews = Number(v.views) || 0;
-        const bluePlays = v.video_insights?.data?.[0]?.values?.[0]?.value;
-        const vReach = typeof bluePlays === 'number' ? bluePlays : 0;
+        let bluePlays = 0;
+        let totalPlays = 0;
+        if (v.video_insights?.data) {
+          for (const m of v.video_insights.data) {
+            if (m.name === 'blue_reels_play_count') bluePlays = m.values?.[0]?.value || 0;
+            if (m.name === 'fb_reels_total_plays') totalPlays = m.values?.[0]?.value || 0;
+          }
+        }
         resultMap.set(v.id, {
-          views: Math.max(vViews, vReach),
+          views: Math.max(vViews, bluePlays, totalPlays),
           description: v.description || '',
         });
       }
