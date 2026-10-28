@@ -1,6 +1,7 @@
 import { Controller, Post, Get, Delete, Patch, Body, Param, UseGuards } from '@nestjs/common';
 import { ZTTeamCrawlerService } from './crawler.service';
 import { ZTTeamFetcherService } from './fetcher.service';
+import { ZTTeamCrawlerCron } from './crawler.cron';
 import { ZTTeamAuthGuard } from '../auth/auth.guard';
 
 @Controller('crawler')
@@ -8,7 +9,8 @@ import { ZTTeamAuthGuard } from '../auth/auth.guard';
 export class ZTTeamCrawlerController {
   constructor(
     private readonly crawlerService: ZTTeamCrawlerService,
-    private readonly fetcherService: ZTTeamFetcherService
+    private readonly fetcherService: ZTTeamFetcherService,
+    private readonly crawlerCron: ZTTeamCrawlerCron,
   ) {}
 
   @Post('test-scrape')
@@ -34,7 +36,16 @@ export class ZTTeamCrawlerController {
   @Post('sites/:siteId/sources')
   ztteam_createSource(
     @Param('siteId') siteId: string,
-    @Body() body: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }
+    @Body()
+    body: {
+      sourceUrl: string;
+      sourceCategory: string;
+      frequencyCron: string;
+      addLinkToComment?: boolean;
+      batchSize?: number;
+      keepContentImages?: boolean;
+      maxScanPages?: number;
+    }
   ) {
     return this.crawlerService.ztteam_createSource(siteId, body);
   }
@@ -47,9 +58,23 @@ export class ZTTeamCrawlerController {
   @Patch('sources/:sourceId/edit')
   ztteam_updateSource(
     @Param('sourceId') sourceId: string,
-    @Body() body: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }
+    @Body()
+    body: {
+      sourceUrl: string;
+      sourceCategory: string;
+      frequencyCron: string;
+      addLinkToComment?: boolean;
+      batchSize?: number;
+      keepContentImages?: boolean;
+      maxScanPages?: number;
+    }
   ) {
     return this.crawlerService.ztteam_updateSource(sourceId, body);
+  }
+
+  @Post('sources/:sourceId/scan-now')
+  ztteam_scanSourceNow(@Param('sourceId') sourceId: string) {
+    return this.crawlerCron.ztteam_scanSourceNow(sourceId);
   }
 
   @Delete('sources/:sourceId')

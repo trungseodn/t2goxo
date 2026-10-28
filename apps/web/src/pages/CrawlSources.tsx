@@ -50,7 +50,9 @@ export default function WordPressSites() {
   const [sourceCategory, setSourceCategory] = useState('');
   const [frequencyCron, setFrequencyCron] = useState('0 */6 * * *');
   const [batchSize, setBatchSize] = useState<number>(1);
+  const [maxScanPages, setMaxScanPages] = useState<number>(20);
   const [keepContentImages, setKeepContentImages] = useState(false);
+  const [scanningSourceId, setScanningSourceId] = useState<string | null>(null);
 
   /** Fanpages state */
   const [pages, setPages] = useState<any[]>([]);
@@ -209,6 +211,7 @@ export default function WordPressSites() {
     setSourceCategory('');
     setFrequencyCron('0 */6 * * *');
     setBatchSize(1);
+    setMaxScanPages(20);
     setKeepContentImages(false);
   };
 
@@ -221,9 +224,11 @@ export default function WordPressSites() {
     try {
       const rules = JSON.parse(source.extract_rules_json || '{}');
       setBatchSize(rules.batchSize ? Number(rules.batchSize) : 1);
+      setMaxScanPages(rules.maxScanPages ? Number(rules.maxScanPages) : 20);
       setKeepContentImages(Boolean(rules.keepContentImages));
     } catch (e) {
       setBatchSize(1);
+      setMaxScanPages(20);
       setKeepContentImages(false);
     }
   };
@@ -232,14 +237,14 @@ export default function WordPressSites() {
     e.preventDefault();
     try {
       if (editingSourceId) {
-        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages });
+        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages });
         ztteam_showToast('Cập nhật website nguồn thành công', 'success');
       } else {
         const urls = sourceUrl.split('\n').map(u => u.trim()).filter(u => u);
         let successCount = 0;
         for (const url of urls) {
           try {
-            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages });
+            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages });
             successCount++;
           } catch (e) {
             console.error(`Failed to add source ${url}`, e);
@@ -252,6 +257,21 @@ export default function WordPressSites() {
       ztteam_fetchSources(siteId);
     } catch (err: any) {
       ztteam_showToast(err.message || 'Lỗi kết nối.', 'error');
+    }
+  };
+
+  const ztteam_handleScanSourceNow = async (sourceId: string, siteId: string) => {
+    setScanningSourceId(sourceId);
+    ztteam_showToast('Đang quét sâu phân trang & Load More...', 'info');
+    try {
+      const res = await useCrawlerStore.getState().ztteam_scanSourceNow(sourceId);
+      ztteam_showToast(res.message || 'Quét sâu bài viết hoàn tất!', 'success');
+      ztteam_fetchSources(siteId);
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || 'Lỗi khi quét nguồn';
+      ztteam_showToast(msg, 'error');
+    } finally {
+      setScanningSourceId(null);
     }
   };
 
@@ -629,7 +649,7 @@ export default function WordPressSites() {
                         </h5>
                         <div className="flex items-center gap-3">
                           <button
-                            onClick={() => { setShowSourceForm(site.id); setEditingSourceId(null); setSourceUrl(''); setSourceCategory(''); setFrequencyCron('0 */6 * * *'); setBatchSize(1); }}
+                            onClick={() => { setShowSourceForm(site.id); setEditingSourceId(null); setSourceUrl(''); setSourceCategory(''); setFrequencyCron('0 */6 * * *'); setBatchSize(1); setMaxScanPages(20); }}
                             className="text-cyan-400 hover:text-cyan-300 text-xs font-bold flex items-center gap-1 uppercase tracking-wide"
                           >
                             <span className="material-symbols-outlined text-base">add_circle</span>
@@ -716,6 +736,27 @@ export default function WordPressSites() {
                                   </div>
                                 </label>
                               </div>
+
+                              <div className="md:col-span-2">
+                                <div className="flex items-center justify-between p-3.5 bg-fb-surface rounded-2xl border border-white/5">
+                                  <div>
+                                    <span className="text-xs font-bold text-fb-text block">Độ sâu phân trang & Load More</span>
+                                    <span className="text-[11px] text-fb-text-muted block mt-0.5">Số trang tối đa bot sẽ quét sâu qua phân trang hoặc nút Load More để vét sạch bài cũ.</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={50}
+                                      value={maxScanPages}
+                                      onChange={(e) => setMaxScanPages(Math.max(1, Math.min(50, parseInt(e.target.value) || 20)))}
+                                      className="w-16 py-1 px-2.5 rounded-full bg-fb-surface-hover text-fb-text text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-fb-blue border border-white/10"
+                                      required
+                                    />
+                                    <span className="text-xs text-fb-text-muted font-bold">trang</span>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
 
                             {/** Gợi ý trực tiếp cấu hình theo số lượng Fanpage */}
@@ -791,6 +832,17 @@ export default function WordPressSites() {
                                   </span>
                                 </div>
                                 <div>
+                                  <span className="text-[9px] text-fb-text-muted uppercase tracking-wider font-extrabold block">QUÉT SÂU</span>
+                                  <span className="font-bold text-sky-400 truncate block">
+                                    {(() => {
+                                      try {
+                                        const r = JSON.parse(source.extract_rules_json || '{}');
+                                        return r.maxScanPages || 20;
+                                      } catch (e) { return 20; }
+                                    })()} trang
+                                  </span>
+                                </div>
+                                <div>
                                   <span className="text-[9px] text-fb-text-muted uppercase tracking-wider font-extrabold block">LẦN TRƯỚC</span>
                                   <span className="font-bold text-fb-text truncate block">{source.last_crawled_at ? new Date(source.last_crawled_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Chưa chạy'}</span>
                                 </div>
@@ -817,6 +869,16 @@ export default function WordPressSites() {
                               </div>
 
                               <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => ztteam_handleScanSourceNow(source.id, site.id)}
+                                  disabled={scanningSourceId === source.id}
+                                  className="w-8 h-8 flex items-center justify-center text-fb-text-muted hover:bg-cyan-500/15 hover:text-cyan-400 rounded-full transition-colors disabled:opacity-50"
+                                  title="Quét ngay lập tức (Quét sâu phân trang & Load More)"
+                                >
+                                  <span className={`material-symbols-outlined text-base ${scanningSourceId === source.id ? 'animate-spin text-cyan-400' : ''}`}>
+                                    {scanningSourceId === source.id ? 'sync' : 'bolt'}
+                                  </span>
+                                </button>
                                 <button onClick={() => ztteam_handleOpenHistory(source.id)}
                                   className="w-8 h-8 flex items-center justify-center text-fb-text-muted hover:bg-emerald-500/15 hover:text-emerald-400 rounded-full transition-colors" title="Lịch sử lấy bài">
                                   <span className="material-symbols-outlined text-base">history</span>

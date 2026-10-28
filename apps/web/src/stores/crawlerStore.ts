@@ -40,10 +40,11 @@ interface CrawlerState {
   isLoading: boolean;
   error: string | null;
   ztteam_fetchSources: (siteId: string) => Promise<void>;
-  ztteam_createSource: (siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }) => Promise<void>;
-  ztteam_updateSource: (sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }) => Promise<void>;
+  ztteam_createSource: (siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) => Promise<void>;
+  ztteam_updateSource: (sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) => Promise<void>;
   ztteam_deleteSource: (sourceId: string) => Promise<void>;
   ztteam_toggleSource: (sourceId: string, enabled: boolean) => Promise<void>;
+  ztteam_scanSourceNow: (sourceId: string) => Promise<{ success: boolean; message: string; processedCount: number; freshFoundCount: number }>;
   ztteam_testScrape: (url: string) => Promise<any>;
   ztteam_fetchHistory: (sourceId: string) => Promise<any[]>;
   ztteam_crawlAndProcess: (params: ZTTeamCrawlAndProcessParams) => Promise<ZTTeamCrawlAndProcessResult>;
@@ -111,6 +112,15 @@ export const useCrawlerStore = create<CrawlerState>((set, get) => ({
       }));
     } catch (error: any) {
       set({ error: error.response?.data?.message || 'Failed to toggle crawl source' });
+      throw error;
+    }
+  },
+
+  ztteam_scanSourceNow: async (sourceId: string) => {
+    try {
+      const response = await api.post(`/crawler/sources/${sourceId}/scan-now`);
+      return response.data;
+    } catch (error: any) {
       throw error;
     }
   },

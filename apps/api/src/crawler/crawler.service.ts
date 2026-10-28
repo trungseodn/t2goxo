@@ -511,12 +511,13 @@ export class ZTTeamCrawlerService {
     };
   }
 
-  async ztteam_createSource(siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }) {
+  async ztteam_createSource(siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) {
     try {
       const extractRules = {
         addLinkToComment: data.addLinkToComment !== undefined ? data.addLinkToComment : true,
-        batchSize: data.batchSize ? Math.max(1, Math.min(10, Number(data.batchSize))) : 1,
+        batchSize: data.batchSize ? Math.max(1, Math.min(20, Number(data.batchSize))) : 1,
         keepContentImages: Boolean(data.keepContentImages),
+        maxScanPages: data.maxScanPages ? Math.max(1, Math.min(50, Number(data.maxScanPages))) : 20,
       };
       return await this.prisma.ztteam_crawl_sources.create({
         data: {
@@ -534,7 +535,7 @@ export class ZTTeamCrawlerService {
     }
   }
 
-  async ztteam_updateSource(sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean }) {
+  async ztteam_updateSource(sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) {
     const existing = await this.prisma.ztteam_crawl_sources.findUnique({ where: { id: sourceId } });
     let extractRules: any = {};
     try {
@@ -548,10 +549,13 @@ export class ZTTeamCrawlerService {
       extractRules.addLinkToComment = data.addLinkToComment;
     }
     if (data.batchSize !== undefined) {
-      extractRules.batchSize = Math.max(1, Math.min(10, Number(data.batchSize)));
+      extractRules.batchSize = Math.max(1, Math.min(20, Number(data.batchSize)));
     }
     if (data.keepContentImages !== undefined) {
       extractRules.keepContentImages = Boolean(data.keepContentImages);
+    }
+    if (data.maxScanPages !== undefined) {
+      extractRules.maxScanPages = Math.max(1, Math.min(50, Number(data.maxScanPages)));
     }
 
     return this.prisma.ztteam_crawl_sources.update({

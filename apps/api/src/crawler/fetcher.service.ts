@@ -4,6 +4,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import * as fs from 'fs';
 import * as path from 'path';
+import Parser from 'rss-parser';
 import { ztteam_getSourceOriginalsPath } from '../common/ztteam_storage.util';
 
 export interface ZTTeamFetchResult {
@@ -18,9 +19,36 @@ export interface ZTTeamFetchResult {
   url: string;
 }
 
+export interface ZTTeamPaginationDiscovery {
+  nextPageUrl: string | null;
+  allPageUrls: string[];
+  loadMoreData: {
+    ajaxUrl?: string;
+    action?: string;
+    page?: number;
+    maxPage?: number;
+    query?: any;
+    endpoint?: string;
+  } | null;
+  wpRestApiEndpoint: string | null;
+  rssFeedUrl: string | null;
+}
+
 @Injectable()
 export class ZTTeamFetcherService {
   private readonly logger = new Logger(ZTTeamFetcherService.name);
+  private rssParser: Parser;
+
+  constructor() {
+    this.rssParser = new Parser({
+      timeout: 12000,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        Accept: 'application/rss+xml, application/xml, text/xml, */*',
+      },
+    });
+  }
 
   async ztteam_fetchHtml(url: string): Promise<string> {
     try {
@@ -76,7 +104,8 @@ export class ZTTeamFetcherService {
 
   /**
    * ZTTeam: Kiểm tra thông minh URL có phải là bài viết đơn lẻ (Single Story Article) thực sự hay không.
-   * Loại trừ hoàn toàn: Trang chủ, chuyên mục (/c/, /category/), thẻ tag, tác giả, phân trang, feed, và các trang tĩnh.
+   * Hỗ trợ đầy đủ: slug SEO gạch nối, date permalink, Post ID số/query param, bài viết trong chuyên mục, v.v.
+   * Loại trừ chính xác: Trang chủ, chuyên mục cấp đầu, trang tĩnh hệ thống, phân trang (pagination).
    */
   ztteam_isArticleUrl(candidateUrl: string, baseDomain: string): boolean {
     try {
@@ -90,6 +119,17 @@ export class ZTTeamFetcherService {
       }
 
       let path = u.pathname.trim();
+      const search = u.search;
+
+      /** Hỗ trợ bài viết có dạng query parameter: ?p=123 hoặc ?id=123 hoặc ?post=123 */
+      if ((!path || path === '/' || path === '') && search) {
+        const pParam = u.searchParams.get('p') || u.searchParams.get('id') || u.searchParams.get('post') || u.searchParams.get('article_id');
+        if (pParam && /^\d+$/.test(pParam)) {
+          return true;
+        }
+        return false;
+      }
+
       if (!path || path === '/' || path === '') {
         return false;
       }
@@ -98,77 +138,43 @@ export class ZTTeamFetcherService {
       const normalizedPath = path.endsWith('/') ? path.slice(0, -1) : path;
       const pathLower = normalizedPath.toLowerCase();
 
-      /** 2. Danh sách đen tiền tố và thành phần URL không phải bài viết */
-      const nonArticleKeywords = [
-        '/category/',
-        '/categories/',
-        '/c/',
-        '/cat/',
-        '/chuyen-muc/',
-        '/danh-muc/',
-        '/the-loai/',
-        '/tag/',
-        '/tags/',
-        '/the/',
-        '/topic/',
-        '/topics/',
-        '/label/',
-        '/keyword/',
-        '/sections/',
-        '/section/',
-        '/author/',
-        '/tac-gia/',
-        '/user/',
-        '/profile/',
-        '/members/',
-        '/page/',
-        '/p/',
-        '/feed',
-        '/rss',
-        '/atom',
-        '/archive',
-        '/archives/',
-        '/search',
-        '/all/',
-        '/about',
-        '/contact',
-        '/privacy',
-        '/terms',
-        '/disclaimer',
-        '/policy',
-        '/dmca',
-        '/sitemap',
-        '/faq',
-        '/advertise',
-        '/advertising',
-        '/quang-cao',
-        '/lien-he',
-        '/gioi-thieu',
-        '/wp-admin',
-        '/wp-login',
-        '/wp-content',
-        '/wp-includes',
-        '/admin',
-        '/login',
-        '/register',
-        '/signup',
-        '/cart',
-        '/checkout',
-        '/my-account'
-      ];
-
-      for (const keyword of nonArticleKeywords) {
-        if (pathLower.includes(keyword) || pathLower.endsWith(keyword.replace(/\/$/, ''))) {
-          return false;
-        }
+      /** 2. Phân đoạn path thành mảng segments */
+      const segments = normalizedPath.split('/').filter(Boolean);
+      if (segments.length === 0) {
+        return false;
       }
 
-      /** 3. Loại trừ các file tĩnh / media */
+      const lastSegment = segments[segments.length - 1].toLowerCase();
+
+      /** 3. Loại trừ các trang hệ thống, chính sách, tài khoản */
+      const staticSystemPages = new Set([
+        'about', 'about-us', 'contact', 'contact-us', 'privacy', 'privacy-policy',
+        'terms', 'terms-of-service', 'terms-and-conditions', 'disclaimer', 'policy',
+        'dmca', 'sitemap', 'faq', 'advertise', 'advertising', 'quang-cao', 'lien-he',
+        'gioi-thieu', 'login', 'register', 'signup', 'cart', 'checkout', 'my-account',
+        'wp-admin', 'wp-login', 'wp-content', 'wp-includes', 'admin'
+      ]);
+      if (staticSystemPages.has(lastSegment)) {
+        return false;
+      }
+
+      /** Loại trừ các trang phân trang (pagination itself is not an article) */
+      if (/^page$/i.test(lastSegment) || /^p$/i.test(lastSegment)) {
+        return false;
+      }
+      if (segments.length >= 2 && segments[segments.length - 2].toLowerCase() === 'page' && /^\d+$/.test(lastSegment)) {
+        return false;
+      }
+      if (/\/page\/\d+$/i.test(pathLower) || /\/p\/\d+$/i.test(pathLower) || /\/page-\d+$/i.test(pathLower)) {
+        return false;
+      }
+
+      /** Loại trừ các file tĩnh / media */
       const staticExtensions = [
         '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.ico',
         '.mp4', '.mp3', '.webm', '.avi', '.mov',
         '.pdf', '.zip', '.rar', '.7z', '.tar', '.gz',
-        '.css', '.js', '.json', '.xml'
+        '.css', '.js', '.json', '.xml', '.rss', '.atom'
       ];
       for (const ext of staticExtensions) {
         if (pathLower.endsWith(ext)) {
@@ -176,50 +182,75 @@ export class ZTTeamFetcherService {
         }
       }
 
-      /** 4. Phân tích các phân đoạn (segments) của đường dẫn */
-      const segments = normalizedPath.split('/').filter(Boolean);
-      if (segments.length === 0) {
+      /** 4. Kiểm tra trang chuyên mục / danh mục:
+       * Nếu URL kết thúc tại cấp chuyên mục (ví dụ /category/life hoặc /tag/viral), đây KHÔNG phải bài viết.
+       * Nhưng nếu sau chuyên mục có slug bài viết (ví dụ /category/life/my-touching-story), đây LÀ bài viết!
+       */
+      const categoryIndicators = new Set([
+        'category', 'categories', 'c', 'cat', 'chuyen-muc', 'danh-muc', 'the-loai',
+        'tag', 'tags', 'the', 'topic', 'topics', 'label', 'keyword', 'sections',
+        'section', 'author', 'tac-gia', 'user', 'profile', 'members', 'archive', 'archives'
+      ]);
+
+      if (segments.length === 1 && categoryIndicators.has(segments[0].toLowerCase())) {
         return false;
       }
-
-      const lastSegment = segments[segments.length - 1];
+      if (segments.length === 2 && categoryIndicators.has(segments[0].toLowerCase())) {
+        return false;
+      }
 
       /** Loại trừ các slug đơn lẻ phổ biến của chuyên mục / landing page */
       const genericSingleSlugs = new Set([
         'news', 'stories', 'story', 'popular', 'trending', 'latest', 'life', 'lifestyle',
         'health', 'tech', 'technology', 'business', 'viral', 'featured', 'home', 'posts',
-        'blog', 'articles', 'article', 'tin-tuc', 'trang-chu', 'chuyen-muc', 'su-kien'
+        'blog', 'articles', 'article', 'tin-tuc', 'trang-chu', 'chuyen-muc', 'su-kien',
+        'feed', 'rss', 'all', 'search'
       ]);
-      if (genericSingleSlugs.has(lastSegment.toLowerCase())) {
+      if (genericSingleSlugs.has(lastSegment)) {
         return false;
       }
 
-      /** 5. Quy luật hình thái học của slug bài viết (Slug Morphology) */
-      /** Mẫu A: Dạng date permalink: /2026/10/slug hoặc /2026/10/11/slug */
-      const dateMatch = pathLower.match(/^\/\d{4}\/\d{2}(?:\/\d{2})?\/([a-z0-9\-]+)$/);
-      if (dateMatch && dateMatch[1] && dateMatch[1].length >= 5) {
+      /** 5. Quy luật nhận diện bài viết thực thụ (High-Recall Accurate Article Recognition) */
+      
+      /** Mẫu A: Dạng date permalink: /2024/10/slug hoặc /2026/10/11/slug */
+      const dateMatch = pathLower.match(/\/\d{4}\/\d{2}(?:\/\d{2})?\/([a-z0-9\-_]+)$/);
+      if (dateMatch && dateMatch[1] && dateMatch[1].length >= 3) {
         return true;
       }
 
-      /** Mẫu B: Post ID dạng số (ví dụ: WordPress permalink /12345/ hoặc /p/12345) */
-      const numericIdMatch = lastSegment.match(/^\d{3,8}$/);
+      /** Mẫu B: Post ID dạng số (ví dụ: WordPress permalink /12345/ hoặc /p/12345 hoặc /archives/12345) */
+      const numericIdMatch = lastSegment.match(/^\d{2,10}$/);
       if (numericIdMatch) {
         return true;
       }
 
-      /** Mẫu C: Slug chữ chuẩn (có dấu gạch ngang '-') */
-      const hyphenCount = (lastSegment.match(/-/g) || []).length;
-      /** Một tiêu đề bài viết thông thường có ít nhất 2 dấu gạch nối (>= 3 từ) và dài >= 12 ký tự */
-      if (hyphenCount >= 2 && lastSegment.length >= 12) {
+      /** Mẫu C: Nằm trong thư mục bài viết (stories, story, article, articles, post, posts, truyen, bai-viet, news, read) */
+      const hasArticleFolder = segments.some((s, idx) => 
+        idx < segments.length - 1 && 
+        ['story', 'stories', 'article', 'articles', 'post', 'posts', 'truyen', 'bai-viet', 'news', 'read', 'read-story'].includes(s.toLowerCase())
+      );
+      if (hasArticleFolder && lastSegment.length >= 4 && !genericSingleSlugs.has(lastSegment)) {
         return true;
       }
 
-      /** Mẫu D: Đuôi .html với slug có gạch ngang */
+      /** Mẫu D: Slug có dấu gạch ngang '-' hoặc gạch dưới '_' (chuẩn slug SEO bài viết) */
+      const hyphenOrUnderscoreCount = (lastSegment.match(/[_-]/g) || []).length;
+      /** Chỉ cần >= 1 dấu gạch nối và độ dài >= 6 (ví dụ: my-wife, true-love, lost-son, broken-heart...) */
+      if (hyphenOrUnderscoreCount >= 1 && lastSegment.length >= 6) {
+        return true;
+      }
+
+      /** Mẫu E: Đuôi .html hoặc .htm với slug dài >= 4 */
       if (lastSegment.endsWith('.html') || lastSegment.endsWith('.htm')) {
         const baseSlug = lastSegment.replace(/\.html?$/, '');
-        if (baseSlug.includes('-') && baseSlug.length >= 8) {
+        if (baseSlug.length >= 4) {
           return true;
         }
+      }
+
+      /** Mẫu F: Slug dạng mã hash / alphanumeric dài >= 8 (Medium, Substack, hash ID) */
+      if (/^[a-z0-9]{8,32}$/i.test(lastSegment) && /\d/.test(lastSegment) && /[a-z]/i.test(lastSegment)) {
+        return true;
       }
 
       return false;
@@ -801,6 +832,431 @@ export class ZTTeamFetcherService {
       this.logger.error(`Failed to download and save source original image from ${imageUrl}: ${err.message}`);
       throw err;
     }
+  }
+
+  /**
+   * ZTTeam: Phát hiện và trích xuất cấu trúc phân trang & Load More từ HTML của trang
+   */
+  ztteam_discoverPagination(html: string, pageUrl: string): ZTTeamPaginationDiscovery {
+    const $ = cheerio.load(html);
+    let nextPageUrl: string | null = null;
+    const allPageUrls = new Set<string>();
+    let wpRestApiEndpoint: string | null = null;
+    let rssFeedUrl: string | null = null;
+    let loadMoreData: any = null;
+
+    try {
+      const baseUrl = new URL(pageUrl);
+
+      // 1. Phát hiện endpoint WP REST API từ thẻ link
+      const wpApiLink = $('link[rel="https://api.w.org/"]').attr('href');
+      if (wpApiLink) {
+        wpRestApiEndpoint = new URL(wpApiLink, baseUrl.origin).href;
+      }
+
+      // 2. Phát hiện link RSS Feed từ thẻ link
+      const rssLink =
+        $('link[type="application/rss+xml"]').first().attr('href') ||
+        $('link[type="application/atom+xml"]').first().attr('href');
+      if (rssLink) {
+        rssFeedUrl = new URL(rssLink, baseUrl.origin).href;
+      }
+
+      // 3. Link trang kế tiếp từ thẻ rel="next"
+      const relNext = $('link[rel="next"]').attr('href') || $('a[rel="next"]').attr('href');
+      if (relNext) {
+        try {
+          nextPageUrl = new URL(relNext, baseUrl.origin).href;
+        } catch {}
+      }
+
+      // 4. Tìm link kế tiếp từ class pagination phổ biến
+      const nextSelectors = [
+        'a.next', 'a.next-page', 'a.page-numbers.next', '.pagination .next a',
+        '.nav-links .next a', '.pager-next a', 'a[class*="pagination-next"]',
+        'a[class*="next-page"]', 'a[class*="page-link-next"]', 'a[rel="next"]',
+        'li.next a', '.pagination-next a', '.pagination__next a'
+      ];
+      if (!nextPageUrl) {
+        for (const sel of nextSelectors) {
+          const href = $(sel).attr('href');
+          if (href && href !== '#' && !href.startsWith('javascript:')) {
+            try {
+              nextPageUrl = new URL(href, baseUrl.origin).href;
+              break;
+            } catch {}
+          }
+        }
+      }
+
+      // 5. Tìm link trang kế tiếp dựa trên văn bản hiển thị
+      if (!nextPageUrl) {
+        $('a').each((_, el) => {
+          if (nextPageUrl) return;
+          const text = $(el).text().trim().toLowerCase();
+          const href = $(el).attr('href');
+          if (!href || href === '#' || href.startsWith('javascript:')) return;
+
+          if (
+            text === 'next' ||
+            text === 'next page' ||
+            text === 'older posts' ||
+            text === 'older' ||
+            text === 'trang sau' ||
+            text === 'trang tiếp' ||
+            text === 'tiếp theo' ||
+            text === 'tiếp' ||
+            text === '»' ||
+            text === '›' ||
+            text === '>'
+          ) {
+            try {
+              nextPageUrl = new URL(href, baseUrl.origin).href;
+            } catch {}
+          }
+        });
+      }
+
+      // 6. Thu thập toàn bộ các link trang cụ thể từ container phân trang
+      const paginationContainerSelectors = [
+        '.pagination a', '.page-numbers a', 'a.page-numbers',
+        '.nav-links a', '.pager a', '.wp-pagenavi a',
+        '[class*="pagination"] a', '[class*="pagenavi"] a', '[class*="page-nav"] a',
+        'nav[aria-label*="pagination" i] a', 'nav[aria-label*="page" i] a'
+      ];
+
+      $(paginationContainerSelectors.join(', ')).each((_, el) => {
+        const href = $(el).attr('href');
+        if (!href || href === '#' || href.startsWith('javascript:')) return;
+        try {
+          const resolved = new URL(href, baseUrl.origin).href;
+          if (
+            resolved.includes(baseUrl.hostname) &&
+            (resolved.includes('/page/') ||
+              resolved.includes('page=') ||
+              resolved.includes('paged=') ||
+              resolved.includes('/p/') ||
+              resolved.includes('page-'))
+          ) {
+            allPageUrls.add(resolved);
+          }
+        } catch {}
+      });
+
+      // 7. Nhận diện nút "Load More" hoặc trigger AJAX
+      const loadMoreSelectors = [
+        'button[class*="load-more"]', 'a[class*="load-more"]',
+        'button[id*="load-more"]', 'a[id*="load-more"]',
+        'button[class*="loadmore"]', 'a[class*="loadmore"]',
+        '[data-loadmore]', '.btn-load-more', '.load-more-posts',
+        '[data-action*="load_more"]', '[data-action*="loadmore"]'
+      ];
+
+      for (const sel of loadMoreSelectors) {
+        const btn = $(sel).first();
+        if (btn.length > 0) {
+          const dataUrl = btn.attr('data-url') || btn.attr('data-endpoint') || btn.attr('href');
+          const dataAction = btn.attr('data-action');
+          const dataPage = btn.attr('data-page') || btn.attr('data-paged');
+          const dataMaxPage = btn.attr('data-max-page') || btn.attr('data-total-pages');
+          const dataQuery = btn.attr('data-query');
+
+          loadMoreData = {
+            url: dataUrl && !dataUrl.startsWith('#') && !dataUrl.startsWith('javascript:')
+              ? new URL(dataUrl, baseUrl.origin).href
+              : undefined,
+            action: dataAction || undefined,
+            page: dataPage ? parseInt(dataPage, 10) : undefined,
+            maxPage: dataMaxPage ? parseInt(dataMaxPage, 10) : undefined,
+            query: dataQuery || undefined,
+          };
+          break;
+        }
+      }
+
+      // Kiểm tra script nội dòng xem có admin-ajax.php không
+      if (!loadMoreData) {
+        $('script').each((_, el) => {
+          const scriptText = $(el).html() || '';
+          if (scriptText.includes('admin-ajax.php')) {
+            const m = scriptText.match(/["']([^"']*admin-ajax\.php[^"']*)["']/);
+            if (m && m[1]) {
+              try {
+                const ajaxUrl = new URL(m[1].replace(/\\/g, ''), baseUrl.origin).href;
+                loadMoreData = { ajaxUrl };
+              } catch {}
+            }
+          }
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Lỗi khi phân tích phân trang tại ${pageUrl}: ${err.message}`);
+    }
+
+    return {
+      nextPageUrl,
+      allPageUrls: Array.from(allPageUrls),
+      loadMoreData,
+      wpRestApiEndpoint,
+      rssFeedUrl,
+    };
+  }
+
+  /**
+   * ZTTeam: Bóc tách toàn bộ link bài viết chuẩn từ mã HTML của một trang
+   * Không giới hạn 15 bài, giữ nguyên toàn bộ bài viết hợp lệ tìm thấy
+   */
+  ztteam_extractArticleLinksFromHtml(html: string, pageUrl: string): string[] {
+    const $ = cheerio.load(html);
+    const baseUrl = new URL(pageUrl);
+    const extractedSet = new Set<string>();
+
+    // Loại bỏ các thành phần rác không chứa bài viết
+    $('header, footer, nav, aside, .sidebar, .widget, .menu, #menu, .nav-menu, .navigation, .comment-respond, .comments, .site-header, .site-footer, .top-bar, .sub-menu, .dropdown-menu, .breadcrumb, .breadcrumbs, .related-posts, .author-box').remove();
+
+    // Nhóm 1: Các thẻ link trong bài viết, tiêu đề bài viết và ảnh đại diện
+    const primarySelectors = [
+      'article a[href]',
+      'h1 a[href]', 'h2 a[href]', 'h3 a[href]', 'h4 a[href]',
+      '.entry-title a[href]', '.post-title a[href]', '.card-title a[href]', '.story-card a[href]',
+      '.article-card a[href]', '.post-item a[href]', '.blog-post a[href]', '.story-item a[href]',
+      '.item-title a[href]', '.story-link a[href]', 'a.story-link', 'a.post-link', 'a.entry-link',
+      '.entry-image a[href]', '.post-thumbnail a[href]', '.featured-image a[href]', '.card-img a[href]',
+      '.card a[href]', '.item a[href]'
+    ];
+
+    $(primarySelectors.join(', ')).each((_, el) => {
+      let href = $(el).attr('href');
+      if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+      try {
+        const fullUrl = new URL(href, baseUrl.origin).href;
+        const cleanUrl = fullUrl.split('#')[0];
+        if (this.ztteam_isArticleUrl(cleanUrl, baseUrl.hostname)) {
+          extractedSet.add(cleanUrl);
+        }
+      } catch {}
+    });
+
+    // Nhóm 2: Quét toàn bộ link trong vùng nội dung chính nếu chưa tìm đủ
+    const containerSelectors = [
+      'main a[href]', '#content a[href]', '.content a[href]', '#main a[href]',
+      '.main-content a[href]', '.site-content a[href]', '.posts a[href]',
+      '.articles a[href]', '.stories a[href]', '.archive-posts a[href]',
+      'body a[href]'
+    ];
+
+    for (const sel of containerSelectors) {
+      if (extractedSet.size >= 80) break;
+      $(sel).each((_, el) => {
+        let href = $(el).attr('href');
+        if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
+        try {
+          const fullUrl = new URL(href, baseUrl.origin).href;
+          const cleanUrl = fullUrl.split('#')[0];
+          if (this.ztteam_isArticleUrl(cleanUrl, baseUrl.hostname)) {
+            extractedSet.add(cleanUrl);
+          }
+        } catch {}
+      });
+    }
+
+    return Array.from(extractedSet);
+  }
+
+  /**
+   * ZTTeam: Lấy danh sách link bài viết từ WordPress REST API (sạch, chuẩn và cực nhanh)
+   */
+  async ztteam_fetchWpRestApiPosts(siteUrl: string, pageNum: number = 1, perPage: number = 20): Promise<{ articles: string[]; totalPages: number } | null> {
+    try {
+      const u = new URL(siteUrl);
+      const endpoint = `${u.origin}/wp-json/wp/v2/posts?page=${pageNum}&per_page=${perPage}&_fields=id,link,title`;
+      this.logger.log(`[WP REST API] Đang lấy bài viết: ${endpoint}`);
+
+      const response = await fetch(endpoint, {
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const totalPagesHeader = response.headers.get('x-wp-totalpages');
+      const totalPages = totalPagesHeader ? parseInt(totalPagesHeader, 10) : 1;
+
+      const posts = await response.json();
+      if (!Array.isArray(posts) || posts.length === 0) {
+        return { articles: [], totalPages };
+      }
+
+      const articles: string[] = [];
+      for (const p of posts) {
+        if (p.link) {
+          articles.push(p.link);
+        }
+      }
+
+      return { articles, totalPages };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ZTTeam: Lấy danh sách link bài viết từ nguồn RSS Feed qua từng trang
+   */
+  async ztteam_fetchRssArticles(feedUrl: string, pageNum: number = 1): Promise<string[]> {
+    const articleUrls = new Set<string>();
+    const baseUrl = new URL(feedUrl);
+
+    let targetUrl = feedUrl;
+    if (pageNum > 1) {
+      if (feedUrl.includes('?')) {
+        targetUrl = `${feedUrl}&paged=${pageNum}`;
+      } else {
+        targetUrl = `${feedUrl.replace(/\/+$/, '')}/?paged=${pageNum}`;
+      }
+    }
+
+    try {
+      this.logger.log(`[RSS Feed] Đang bóc tách feed: ${targetUrl} (Trang ${pageNum})`);
+      const feed = await this.rssParser.parseURL(targetUrl);
+      if (feed && feed.items && feed.items.length > 0) {
+        for (const item of feed.items) {
+          if (item.link) {
+            const cleanUrl = item.link.split('#')[0].trim();
+            if (this.ztteam_isArticleUrl(cleanUrl, baseUrl.hostname)) {
+              articleUrls.add(cleanUrl);
+            }
+          }
+        }
+      }
+    } catch (directErr: any) {
+      this.logger.warn(`Lỗi lấy RSS trực tiếp từ ${targetUrl}: ${directErr.message}`);
+      try {
+        const altUrl = pageNum > 1 ? `${feedUrl.replace(/\/+$/, '')}/feed/?paged=${pageNum}` : feedUrl;
+        const xml = await this.ztteam_fetchHtml(altUrl);
+        const parsedFeed = await this.rssParser.parseString(xml);
+        if (parsedFeed && parsedFeed.items) {
+          for (const item of parsedFeed.items) {
+            if (item.link) {
+              const cleanUrl = item.link.split('#')[0].trim();
+              if (this.ztteam_isArticleUrl(cleanUrl, baseUrl.hostname)) {
+                articleUrls.add(cleanUrl);
+              }
+            }
+          }
+        }
+      } catch (xmlErr: any) {
+        this.logger.debug(`Bóc tách RSS fallback không thành công: ${xmlErr.message}`);
+      }
+    }
+
+    return Array.from(articleUrls);
+  }
+
+  /**
+   * ZTTeam: Kích hoạt gọi endpoint Load More AJAX của theme WordPress
+   */
+  async ztteam_fetchLoadMoreAjaxArticles(loadMoreData: any, baseUrl: string, pageNum: number): Promise<string[]> {
+    try {
+      const ajaxUrl = loadMoreData.ajaxUrl || `${new URL(baseUrl).origin}/wp-admin/admin-ajax.php`;
+      const action = loadMoreData.action || 'load_more_posts';
+
+      const params = new URLSearchParams();
+      params.append('action', action);
+      params.append('page', String(pageNum));
+      params.append('paged', String(pageNum));
+      if (loadMoreData.query) {
+        params.append(
+          'query',
+          typeof loadMoreData.query === 'string' ? loadMoreData.query : JSON.stringify(loadMoreData.query)
+        );
+      }
+
+      this.logger.log(`[Load More AJAX] Gọi endpoint: ${ajaxUrl} trang ${pageNum} với action=${action}`);
+      const response = await fetch(ajaxUrl, {
+        method: 'POST',
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        },
+        body: params.toString(),
+      });
+
+      if (!response.ok) return [];
+
+      const rawText = await response.text();
+      let htmlToParse = rawText;
+      try {
+        const json = JSON.parse(rawText);
+        htmlToParse = json.content || json.data || json.html || rawText;
+      } catch {}
+
+      return this.ztteam_extractArticleLinksFromHtml(htmlToParse, baseUrl);
+    } catch (e: any) {
+      this.logger.debug(`Load More AJAX request thất bại: ${e.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * ZTTeam: Tạo danh sách các ứng viên URL phân trang linh hoạt (hỗ trợ WordPress, CMS query param, path permalink)
+   */
+  ztteam_generateCandidatePageUrls(sourceUrl: string, pageNum: number): string[] {
+    if (pageNum <= 1) return [sourceUrl];
+    const candidates: string[] = [];
+
+    try {
+      const urlObj = new URL(sourceUrl);
+      const origin = urlObj.origin;
+      const pathname = urlObj.pathname;
+      const search = urlObj.search;
+      const cleanPath = pathname.replace(/\/+$/, '');
+
+      // Mẫu 1: URL nguồn đã có sẵn tham số page= hoặc paged= -> Tăng số trang
+      if (/[?&](?:page|paged)=(\d+)/i.test(sourceUrl)) {
+        candidates.push(sourceUrl.replace(/([?&](?:page|paged)=)\d+/i, `$1${pageNum}`));
+      }
+
+      // Mẫu 2: Permalink dạng WordPress /page/N/
+      if (/\/page\/\d+\/?$/i.test(pathname)) {
+        candidates.push(`${origin}${pathname.replace(/\/page\/\d+\/?$/i, `/page/${pageNum}/`)}${search}`);
+      } else {
+        candidates.push(`${origin}${cleanPath}/page/${pageNum}/${search}`);
+      }
+
+      // Mẫu 3: Query parameter ?paged=N hoặc &paged=N
+      if (search) {
+        const searchParams = new URLSearchParams(search);
+        searchParams.set('paged', String(pageNum));
+        candidates.push(`${origin}${pathname}?${searchParams.toString()}`);
+        searchParams.delete('paged');
+        searchParams.set('page', String(pageNum));
+        candidates.push(`${origin}${pathname}?${searchParams.toString()}`);
+      } else {
+        candidates.push(`${origin}${pathname}?paged=${pageNum}`);
+        candidates.push(`${origin}${pathname}?page=${pageNum}`);
+      }
+
+      // Mẫu 4: Không có dấu gạch chéo cuối /page/N
+      candidates.push(`${origin}${cleanPath}/page/${pageNum}${search}`);
+
+      // Mẫu 5: /p/N/ hoặc /page-N/
+      candidates.push(`${origin}${cleanPath}/p/${pageNum}/${search}`);
+      candidates.push(`${origin}${cleanPath}/page-${pageNum}/${search}`);
+    } catch {
+      candidates.push(sourceUrl);
+    }
+
+    return Array.from(new Set(candidates));
   }
 }
 
