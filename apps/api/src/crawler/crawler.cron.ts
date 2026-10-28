@@ -535,7 +535,6 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
       scannedPagesCount,
     };
   }
-  }
 
   /** Update SYNC_CHECK record to mark the last time we checked this source */
   private async ztteam_markSourceSyncTime(sourceId: string): Promise<void> {
