@@ -46,7 +46,9 @@ export function ztteam_getRandomHookComment(seed?: string): string {
 @Injectable()
 export class ZTTeamPublisherCron {
   private readonly logger = new Logger(ZTTeamPublisherCron.name);
-  private isRunning = false;
+  private isPublishing = false;
+  private isCheckingViews = false;
+  private isCheckingComments = false;
   /** ZTTeam: Lưu vết thời điểm xuất bản gần nhất trên toàn hệ thống (mọi Page) để chống Burst API */
   private ztteam_lastGlobalPublishTimestamp = 0;
 
@@ -63,20 +65,13 @@ export class ZTTeamPublisherCron {
       return;
     }
 
-    if (this.isRunning) {
+    if (this.isPublishing) {
       this.logger.warn('Publisher cron is already running, skipping this tick');
       return;
     }
-    this.isRunning = true;
+    this.isPublishing = true;
 
     try {
-      /** 0. Xử lý quy trình comment tự động sau 1 giờ và reply Part 2 sau 15 phút cho các bài đã đăng */
-      await this.ztteam_handleDelayedComments();
-
-      /** 0.1 Xử lý tự động gắn link theo ngưỡng view video (chạy mỗi 2 phút) */
-      if (new Date().getMinutes() % 2 === 0) {
-        await this.ztteam_handleViewThresholdLinkInjection();
-      }
 
       /** 1. Tìm các Reel đã render xong đang chờ đăng (xếp theo thời gian tạo cũ nhất trước) */
       const pendingReels = await this.prisma.ztteam_reels.findMany({
@@ -134,36 +129,56 @@ export class ZTTeamPublisherCron {
           continue;
         }
 
-        /** Lấy bài đăng gần nhất (thành công HOẶC thất bại) của Page này để tính khoảng cách thời gian */
+        /** 1. Lấy bài đăng THÀNH CÔNG gần nhất (is_posted = true) của Page này để tính khoảng cách thời gian theo posted_at thực tế */
         const lastPostedReel = await this.prisma.ztteam_reels.findFirst({
           where: {
             page_id: pageId,
-            OR: [{ is_posted: true }, { status: 'FAILED' }]
+            is_posted: true,
           },
-          orderBy: { updated_at: 'desc' }
+          orderBy: { posted_at: 'desc' },
         });
         const lastPostedImage = await this.prisma.ztteam_images.findFirst({
           where: {
             page_id: pageId,
-            OR: [{ is_posted: true }, { status: 'FAILED' }]
+            is_posted: true,
           },
-          orderBy: { updated_at: 'desc' }
+          orderBy: { posted_at: 'desc' },
         });
 
         let lastPostTime: Date | null = null;
         let lastPostType: 'reel' | 'image' | null = null;
 
-        if (lastPostedReel) {
-          /** Dùng updated_at thay vì posted_at vì có thể nó là FAILED */
-          lastPostTime = new Date(lastPostedReel.updated_at);
+        if (lastPostedReel && (lastPostedReel.posted_at || lastPostedReel.created_at)) {
+          lastPostTime = new Date(lastPostedReel.posted_at || lastPostedReel.created_at);
           lastPostType = 'reel';
         }
-        if (lastPostedImage) {
-          const imageTime = new Date(lastPostedImage.updated_at);
+        if (lastPostedImage && (lastPostedImage.posted_at || lastPostedImage.created_at)) {
+          const imageTime = new Date(lastPostedImage.posted_at || lastPostedImage.created_at);
           if (!lastPostTime || imageTime > lastPostTime) {
             lastPostTime = imageTime;
             lastPostType = 'image';
           }
+        }
+
+        /** 2. Kiểm tra nếu Page có bài thất bại (FAILED) trong 10 phút qua -> Giãn cách an toàn để tránh spam Facebook */
+        const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
+        const recentFailed = await this.prisma.ztteam_images.findFirst({
+          where: {
+            page_id: pageId,
+            status: 'FAILED',
+            updated_at: { gte: tenMinutesAgo },
+          },
+        }) || await this.prisma.ztteam_reels.findFirst({
+          where: {
+            page_id: pageId,
+            status: 'FAILED',
+            updated_at: { gte: tenMinutesAgo },
+          },
+        });
+
+        if (recentFailed) {
+          this.logger.log(`Page ${page.name}: Có bài vừa thất bại trong 10 phút qua -> Tạm hoãn 10 phút để bảo vệ tài khoản.`);
+          continue;
         }
 
         const diffMinutesFromLastPost = lastPostTime ? Math.floor((now.getTime() - lastPostTime.getTime()) / 60000) : Infinity;
@@ -175,11 +190,17 @@ export class ZTTeamPublisherCron {
             /** Luôn tính giờ và phút theo múi giờ chuẩn Việt Nam (Asia/Ho_Chi_Minh) */
             const vnFormatter = new Intl.DateTimeFormat('en-US', {
               timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: 'numeric',
+              day: 'numeric',
               hour: 'numeric',
               minute: 'numeric',
               hour12: false,
             });
             const parts = vnFormatter.formatToParts(now);
+            const vnYear = parseInt(parts.find(p => p.type === 'year')?.value || '1970', 10);
+            const vnMonth = parseInt(parts.find(p => p.type === 'month')?.value || '1', 10) - 1;
+            const vnDay = parseInt(parts.find(p => p.type === 'day')?.value || '1', 10);
             const vnH = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
             const vnM = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
             const currentMinutes = vnH * 60 + vnM;
@@ -188,13 +209,27 @@ export class ZTTeamPublisherCron {
               const [h, m] = time.split(':').map(Number);
               const fixedTimeMinutes = h * 60 + m;
 
-              /** ZTTeam: Mở rộng khung giờ từ 5 phút lên 45 phút để các Page xếp hàng tuần tự không bị lỡ lượt */
-              if (currentMinutes >= fixedTimeMinutes && currentMinutes < fixedTimeMinutes + 45) {
-                /** Nếu đã đăng cách đây chưa đầy 45 phút -> Khung giờ này đã được xử lý */
-                if (diffMinutesFromLastPost < 45) {
-                  this.logger.log(`Page ${page.name}: Slot ${time} already served (${diffMinutesFromLastPost}m ago). Skipping.`);
+              /** Mở rộng khung giờ lên 60 phút để các Page xếp hàng tuần tự không bị lỡ lượt */
+              const isWithinWindow =
+                (currentMinutes >= fixedTimeMinutes && currentMinutes < fixedTimeMinutes + 60) ||
+                (fixedTimeMinutes + 60 >= 1440 && currentMinutes < (fixedTimeMinutes + 60) % 1440);
+
+              if (isWithinWindow) {
+                /** Mốc thời gian chính xác của Slot hôm nay theo giờ VN (UTC+7 -> trừ 7 giờ lấy UTC) */
+                const slotStartTimeMs = Date.UTC(vnYear, vnMonth, vnDay, h - 7, m, 0);
+
+                /** Nếu Page đã đăng bài thực tế (posted_at) từ thời điểm slot này trở đi -> Slot này ĐÃ HOÀN THÀNH */
+                if (lastPostTime && lastPostTime.getTime() >= slotStartTimeMs) {
+                  this.logger.log(`Page ${page.name}: Slot ${time} đã được xuất bản (lúc ${lastPostTime.toLocaleTimeString('vi-VN')}). Bỏ qua.`);
                   break;
                 }
+
+                /** Đảm bảo giữa 2 bài đăng bất kỳ trên cùng 1 Page cách nhau ít nhất 15 phút */
+                if (diffMinutesFromLastPost < 15) {
+                  this.logger.log(`Page ${page.name}: Vừa đăng cách đây ${diffMinutesFromLastPost}m (< 15m). Chờ thêm.`);
+                  break;
+                }
+
                 shouldPublish = true;
                 break;
               }
@@ -296,39 +331,52 @@ export class ZTTeamPublisherCron {
         return a.itemCreatedAt - b.itemCreatedAt;
       });
 
-      this.logger.log(`[ZTTeam Global Dispatcher] Có ${eligibleCandidates.length} bài sẵn sàng xuất bản. Đang điều phối bài ưu tiên cao nhất...`);
+      this.logger.log(`[ZTTeam Global Dispatcher] Có ${eligibleCandidates.length} bài sẵn sàng xuất bản. Đang điều phối hàng đợi...`);
 
       /**
-       * ZTTeam: Kiểm tra và đảm bảo khoảng cách an toàn toàn cục (Global Rate Limiter):
-       * Tuyệt đối không gọi Facebook API nếu lần đăng gần nhất trên toàn hệ thống chưa đủ 45 giây.
+       * ZTTeam Multi-Page Dispatcher:
+       * Điều phối tối đa 3 Page khác nhau trong mỗi phút để giải tỏa hàng đợi
+       * Giãn cách an toàn 5 giây giữa các Page khác nhau để Meta không bao giờ báo lỗi burst API
        */
-      const elapsedSinceLastGlobal = Date.now() - this.ztteam_lastGlobalPublishTimestamp;
-      const MIN_GLOBAL_GAP_MS = 45000;
-      if (this.ztteam_lastGlobalPublishTimestamp > 0 && elapsedSinceLastGlobal < MIN_GLOBAL_GAP_MS) {
-        const waitMs = MIN_GLOBAL_GAP_MS - elapsedSinceLastGlobal;
-        this.logger.log(`[ZTTeam Global Dispatcher] Giãn cách bảo vệ Meta: Chờ thêm ${Math.round(waitMs / 1000)}s trước khi gọi Facebook API...`);
-        await new Promise(resolve => setTimeout(resolve, waitMs));
-      }
+      const MAX_POSTS_PER_MINUTE_BATCH = 3;
+      const dispatchedPageIds = new Set<string>();
 
-      /** Lấy bài viết ưu tiên số 1 để đăng trong chu kỳ này */
-      const target = eligibleCandidates[0];
-      const { selectedItem, page } = target;
+      for (const candidate of eligibleCandidates) {
+        if (dispatchedPageIds.size >= MAX_POSTS_PER_MINUTE_BATCH) {
+          break;
+        }
 
-      this.logger.log(`[ZTTeam Global Dispatcher] Đang xuất bản cho Page: ${page.name} (Đã chờ: ${target.diffMinutesFromLastPost === Infinity ? 'Mới/Vô cực' : target.diffMinutesFromLastPost + 'm'})`);
+        const { selectedItem, page } = candidate;
+        if (dispatchedPageIds.has(page.id)) {
+          continue;
+        }
 
-      if (selectedItem.type === 'reel_legacy') {
-        await this.ztteam_publishReel(selectedItem.data, page);
-      } else if (selectedItem.type === 'image_only') {
-        await this.ztteam_publishImage(selectedItem.data, page, true);
-      } else {
-        await this.ztteam_publishImage(selectedItem.data, page, false);
+        if (dispatchedPageIds.size > 0) {
+          this.logger.log(`[ZTTeam Global Dispatcher] Giãn cách bảo vệ Meta: Chờ 5s trước khi xuất bản Page tiếp theo...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        dispatchedPageIds.add(page.id);
+        this.logger.log(`[ZTTeam Global Dispatcher] Đang xuất bản (${dispatchedPageIds.size}/${MAX_POSTS_PER_MINUTE_BATCH}) cho Page: ${page.name} (Đã chờ: ${candidate.diffMinutesFromLastPost === Infinity ? 'Mới/Vô cực' : candidate.diffMinutesFromLastPost + 'm'})`);
+
+        try {
+          if (selectedItem.type === 'reel_legacy') {
+            await this.ztteam_publishReel(selectedItem.data, page);
+          } else if (selectedItem.type === 'image_only') {
+            await this.ztteam_publishImage(selectedItem.data, page, true);
+          } else {
+            await this.ztteam_publishImage(selectedItem.data, page, false);
+          }
+        } catch (publishErr: any) {
+          this.logger.error(`[ZTTeam Global Dispatcher] Lỗi xuất bản cho Page ${page.name}: ${publishErr.message}`);
+        }
       }
 
       this.ztteam_lastGlobalPublishTimestamp = Date.now();
     } catch (error: any) {
       this.logger.error(`Unified publisher cron error: ${error.message}`);
     } finally {
-      this.isRunning = false;
+      this.isPublishing = false;
     }
   }
 
@@ -709,14 +757,21 @@ export class ZTTeamPublisherCron {
   }
 
   /**
-   * Xử lý quy trình comment tự động 2 bước sau khi đăng bài:
+   * ZTTeam: Cron riêng biệt xử lý quy trình comment tự động 2 bước sau khi đăng bài (chạy mỗi 2 phút độc lập)
    * Bước 1: Sau 60 phút từ posted_at -> Đăng bình luận mồi:
    * "...I know you're all very curious about what happens next, so if you want to read on, leave "YES" in the comments below! 👇"
    * Bước 2: Tương tác thông minh (Smart Engagement):
    * - Trong vòng 2 tiếng (120 phút): Quét mỗi 2 phút, nếu có bất kỳ độc giả thật nào comment -> Reply ngay Part 2 + link cho họ (gửi chuông thông báo).
    * - Nếu sau 2 tiếng vẫn 0 có ai comment: Kích hoạt Fallback tự động reply vào comment mồi của Page để đảm bảo luôn có link bài viết.
    */
+  @Cron('45 */2 * * * *')
   async ztteam_handleDelayedComments() {
+    if (process.env.ENABLE_AUTO_CRON === 'false') return;
+    if (this.isCheckingComments) {
+      return;
+    }
+    this.isCheckingComments = true;
+
     try {
       const now = new Date();
 
@@ -991,13 +1046,23 @@ export class ZTTeamPublisherCron {
       }
     } catch (error: any) {
       this.logger.error(`Error in ztteam_handleDelayedComments: ${error.message}`);
+    } finally {
+      this.isCheckingComments = false;
     }
   }
 
   /**
-   * ZTTeam: Tự động quét lượt xem video và gắn link vào Comment hoặc Caption khi đạt ngưỡng view (View-Based Link Injection)
+   * ZTTeam: Cron riêng biệt tự động quét lượt xem video và gắn link theo ngưỡng view (chạy mỗi 2 phút độc lập)
+   * Không bao giờ chặn luồng xuất bản bài viết
    */
+  @Cron('15 */2 * * * *')
   async ztteam_handleViewThresholdLinkInjection() {
+    if (process.env.ENABLE_AUTO_CRON === 'false') return;
+    if (this.isCheckingViews) {
+      return;
+    }
+    this.isCheckingViews = true;
+
     try {
       const now = new Date();
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1022,7 +1087,7 @@ export class ZTTeamPublisherCron {
           { last_views_checked_at: { sort: 'asc', nulls: 'first' } },
           { posted_at: 'desc' }
         ],
-        take: 100
+        take: 50
       });
 
       // 2. Quét các bài Image có video_url đã đăng dưới dạng video/reel trong 7 ngày
@@ -1046,7 +1111,7 @@ export class ZTTeamPublisherCron {
           { last_views_checked_at: { sort: 'asc', nulls: 'first' } },
           { posted_at: 'desc' }
         ],
-        take: 100
+        take: 50
       });
 
       if (pendingReels.length === 0 && pendingVideoImages.length === 0) {
@@ -1093,6 +1158,8 @@ export class ZTTeamPublisherCron {
       }
     } catch (error: any) {
       this.logger.error(`Error in ztteam_handleViewThresholdLinkInjection: ${error.message}`);
+    } finally {
+      this.isCheckingViews = false;
     }
   }
 
