@@ -456,7 +456,9 @@ export class ZTTeamFetcherService {
         [
           'script', 'style', 'noscript', 'iframe', 'form', 'button', 'nav', 'header', 'footer',
           '.sharedaddy', '.ads', '[data-widget-id]', '.author-box', '.social-share', 'time', '.breadcrumbs',
-          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player',
+          '.featured-image', '.featured-image__wrapper', '.nyp-video-player',
+          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player', '[class*="video-player"]',
+          '[id*="jw-player"]', '[class*="jw-player"]', '.jwplayer', '#nyp-player-lcp-overlay', 'video',
           '.single__inline-module', '.inline-module', 'aside',
           '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
           '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
@@ -536,6 +538,8 @@ export class ZTTeamFetcherService {
       .replace(/^(?:Facebook|Twitter|LinkedIn|Like|Comment|Share|Follow)\s*$/gim, '')
       /** Remove audio player strings */
       .replace(/(?:Audio Player|Listen to this story|Play audio|Pause audio)/gi, '')
+      /** Remove video player overlay script artifacts */
+      .replace(/\(function\(\)\s*\{\s*var\s*overlay[\s\S]*?\}\)\(\);?/g, '')
       /** Remove search result disclosure and related promo */
       .replace(/^See more of our coverage in your search results\.?\s*$/gim, '')
       .replace(/^Explore More[^\n]*$/gim, '')
@@ -716,7 +720,9 @@ export class ZTTeamFetcherService {
           'script', 'style', 'noscript', 'iframe', 'svg', 'button', 'form', 'nav', 'header', 'footer',
           '.sharedaddy', '.ads', '[data-widget-id]', '.comment-respond', '.post-meta', '.entry-meta',
           '.author-box', '.breadcrumbs', '.social-share', '.article-meta', '.byline',
-          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player',
+          '.featured-image', '.featured-image__wrapper', '.nyp-video-player',
+          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player', '[class*="video-player"]',
+          '[id*="jw-player"]', '[class*="jw-player"]', '.jwplayer', '#nyp-player-lcp-overlay', 'video',
           '.single__inline-module', '.inline-module', 'aside',
           '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
           '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
