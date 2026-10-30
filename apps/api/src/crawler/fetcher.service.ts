@@ -452,22 +452,55 @@ export class ZTTeamFetcherService {
     if (!rawHtml) return '';
     try {
       const $ = cheerio.load(rawHtml);
-      $('script, style, noscript, iframe, form, button, nav, header, footer, .sharedaddy, .ads, [data-widget-id], .author-box, .social-share, time, .breadcrumbs').remove();
+      $(
+        [
+          'script', 'style', 'noscript', 'iframe', 'form', 'button', 'nav', 'header', 'footer',
+          '.sharedaddy', '.ads', '[data-widget-id]', '.author-box', '.social-share', 'time', '.breadcrumbs',
+          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player',
+          '.single__inline-module', '.inline-module', 'aside',
+          '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
+          '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
+          '.email-signup', '.newsletter-signup', '.see-also', '.read-next',
+          '#comments', '.conversations-container'
+        ].join(', ')
+      ).remove();
+
+      // Loại bỏ các đoạn văn kêu gọi tải app / đăng ký newsletter / follow MXH
+      $('p').each((_, p) => {
+        const txt = $(p).text().trim();
+        if (
+          txt.includes('California Post News:') ||
+          txt.includes('California Post Sports') ||
+          txt.includes('Sign up here!') ||
+          txt.includes('Download here!') ||
+          txt.includes('Home delivery:') ||
+          txt.includes('See more of our coverage in your search results')
+        ) {
+          $(p).remove();
+        }
+      });
 
       $('img').each((_, el) => {
         let src = $(el).attr('src') || $(el).attr('data-src');
-        const rawSrcset = $(el).attr('srcset');
-        if (!src && rawSrcset) {
-          const srcset = rawSrcset.split(',')[0].trim().split(' ')[0];
-          src = srcset;
+        const rawSrcset = $(el).attr('srcset') || $(el).attr('data-srcset');
+        if ((!src || src.startsWith('data:')) && rawSrcset) {
+          const parts = rawSrcset.split(',').map(s => s.trim().split(' ')[0]).filter(Boolean);
+          if (parts.length > 0) {
+            src = parts[parts.length - 1]; // Lấy ảnh độ phân giải cao nhất
+          }
         }
-        if (src) {
+
+        // Bỏ qua các ảnh base64 placeholder hoặc icon nhỏ
+        if (src && !src.startsWith('data:')) {
           try {
             src = new URL(src, baseUrl).href;
             $(el).attr('src', src);
           } catch (e) {}
+        } else {
+          $(el).remove();
         }
-        $(el).removeAttr('srcset').removeAttr('sizes').removeAttr('loading').removeAttr('data-src');
+
+        $(el).removeAttr('srcset').removeAttr('sizes').removeAttr('loading').removeAttr('data-src').removeAttr('data-srcset');
       });
 
       return $('body').html() || $.html();
@@ -503,6 +536,11 @@ export class ZTTeamFetcherService {
       .replace(/^(?:Facebook|Twitter|LinkedIn|Like|Comment|Share|Follow)\s*$/gim, '')
       /** Remove audio player strings */
       .replace(/(?:Audio Player|Listen to this story|Play audio|Pause audio)/gi, '')
+      /** Remove search result disclosure and related promo */
+      .replace(/^See more of our coverage in your search results\.?\s*$/gim, '')
+      .replace(/^Explore More[^\n]*$/gim, '')
+      .replace(/(?:California Post|New York Post|Page Six)\s+(?:News|Sports|Opinion|Newsletters|App)[^\n]*/gi, '')
+      .replace(/(?:Sign up here!|Download here!|Home delivery:)[^\n]*/gi, '')
       /** Remove viral engagement spam callouts */
       .replace(/(?:The story is still unfolding[^\n]*|Type\s*["“']?YES["”']?[^\n]*|Comment\s*["“']?YES["”']?[^\n]*|Drop a\s*["“']?YES["”']?[^\n]*|Follow for part\s*\d+[^\n]*|Like and follow for part\s*\d+[^\n]*)/gi, '')
       /** Remove disclaimer at the very end if present */
@@ -646,26 +684,89 @@ export class ZTTeamFetcherService {
 
       const $ = cheerio.load(html);
 
-      const image = this.ztteam_extractOgImage($);
+      let image = this.ztteam_extractOgImage($);
+      if (image && image.startsWith('data:')) {
+        image = null;
+      }
       const siteName = this.ztteam_extractSiteName($);
       let { title, content, contentHtml, excerpt } = this.ztteam_parseReadability(
         html,
         url,
       );
 
-      const customContentEl = $('.article-content').length ? $('.article-content') : ($('.entry-content').length ? $('.entry-content') : null);
+      const cleanH1 = $('h1').first().text().trim();
+      const ogTitle = $('meta[property="og:title"]').attr('content')?.trim();
+      if (cleanH1 && cleanH1.length >= 10) {
+        title = cleanH1;
+      } else if (ogTitle && ogTitle.length >= 10) {
+        title = ogTitle;
+      }
+
+      /** Ưu tiên các selector chứa bài viết chính xác, loại bỏ các wrapper ảnh/video ngoài lề */
+      const customContentEl =
+        $('.single__content.entry-content').length ? $('.single__content.entry-content') :
+        ($('.entry-content:not(.featured-image)').length ? $('.entry-content:not(.featured-image)') :
+        ($('.article-content').length ? $('.article-content') :
+        ($('.entry-content').length ? $('.entry-content').last() :
+        ($('div[itemprop="articleBody"]').length ? $('div[itemprop="articleBody"]') : null))));
+
       if (customContentEl) {
         const clone = customContentEl.clone();
-        clone.find('script, style, noscript, iframe, svg, nav, header, footer, .sharedaddy, .ads, [data-widget-id], .comment-respond, .post-meta, .entry-meta, .author-box, .breadcrumbs, .social-share').remove();
-        content = clone.text().replace(/\t/g, ' ').replace(/[ ]{2,}/g, ' ').replace(/\. ([A-Z])/g, '.\n\n$1').trim();
+        clone.find([
+          'script', 'style', 'noscript', 'iframe', 'svg', 'button', 'form', 'nav', 'header', 'footer',
+          '.sharedaddy', '.ads', '[data-widget-id]', '.comment-respond', '.post-meta', '.entry-meta',
+          '.author-box', '.breadcrumbs', '.social-share', '.article-meta', '.byline',
+          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player',
+          '.single__inline-module', '.inline-module', 'aside',
+          '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
+          '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
+          '.email-signup', '.newsletter-signup', '.see-also', '.read-next',
+          '#comments', '.conversations-container'
+        ].join(', ')).remove();
+
+        clone.find('p').each((_, p) => {
+          const txt = $(p).text().trim();
+          if (
+            txt.includes('California Post News:') ||
+            txt.includes('California Post Sports') ||
+            txt.includes('Sign up here!') ||
+            txt.includes('Download here!') ||
+            txt.includes('Home delivery:') ||
+            txt.includes('See more of our coverage in your search results')
+          ) {
+            $(p).remove();
+          }
+        });
+
+        const paragraphs: string[] = [];
+        clone.find('p').each((_, p) => {
+          const txt = $(p).text().trim().replace(/\s+/g, ' ');
+          if (txt && txt.length > 10) {
+            paragraphs.push(txt);
+          }
+        });
+
+        if (paragraphs.length >= 2) {
+          content = paragraphs.join('\n\n');
+        } else {
+          content = clone.text().replace(/\t/g, ' ').replace(/[ ]{2,}/g, ' ').replace(/\. ([A-Z])/g, '.\n\n$1').trim();
+        }
+        contentHtml = clone.html() || contentHtml;
       }
       content = this.ztteam_cleanStoryContent(content);
 
       let images: string[] = [];
       const content$ = cheerio.load(contentHtml);
       content$('img').each((_, el) => {
-        const src = content$(el).attr('src') || content$(el).attr('data-src');
-        if (src && src.startsWith('http')) {
+        let src = content$(el).attr('src') || content$(el).attr('data-src');
+        const rawSrcset = content$(el).attr('srcset') || content$(el).attr('data-srcset');
+        if ((!src || src.startsWith('data:')) && rawSrcset) {
+          const parts = rawSrcset.split(',').map(s => s.trim().split(' ')[0]).filter(Boolean);
+          if (parts.length > 0) {
+            src = parts[parts.length - 1];
+          }
+        }
+        if (src && src.startsWith('http') && !src.startsWith('data:')) {
           images.push(src);
         }
       });
