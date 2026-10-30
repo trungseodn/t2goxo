@@ -392,9 +392,6 @@ export class ZTTeamFetcherService {
         text = data.content || rawBody;
         const meta = data.metadata || {};
         featuredImage = meta['og:image'] || meta['twitter:image'] || data.image || null;
-        if (featuredImage) {
-          images.push(featuredImage);
-        }
       }
     } catch (e) {
       /** Fallback nếu Jina trả về text plain thay vì JSON */
@@ -415,6 +412,31 @@ export class ZTTeamFetcherService {
       }
     }
 
+    const isUnwantedCover = (u: string | null | undefined): boolean => {
+      if (!u) return true;
+      const lower = u.toLowerCase();
+      return (
+        lower.includes('collage') ||
+        lower.includes('newspress-collage') ||
+        lower.includes('video-player') ||
+        lower.includes('player-overlay') ||
+        lower.includes('header-banner') ||
+        lower.includes('placeholder') ||
+        lower.includes('default-image') ||
+        lower.includes('logo') ||
+        lower.includes('avatar')
+      );
+    };
+
+    if (featuredImage && isUnwantedCover(featuredImage)) {
+      featuredImage = null;
+    }
+
+    const filteredImages = images.filter(img => !isUnwantedCover(img));
+    if (!featuredImage && filteredImages.length > 0) {
+      featuredImage = filteredImages[0];
+    }
+
     /** Clean markdown headers, audio player artifacts (00:00), ad text, and image markdown from text */
     const cleanContent = this.ztteam_cleanStoryContent(text);
     const finalTitle = title || this.ztteam_extractDomain(url);
@@ -427,15 +449,15 @@ export class ZTTeamFetcherService {
 
     /** ZTTeam: Chuẩn hóa HTML có chứa ảnh cho website đích */
     let cleanHtmlWithImages = cleanContent.split(/\n\s*\n/).map(p => `<p>${p.trim()}</p>`).join('\n');
-    if (images.length > 0) {
-      const imgTags = images.map(img => `<p><img src="${img}" alt="" /></p>`).join('\n');
+    if (filteredImages.length > 0) {
+      const imgTags = filteredImages.map(img => `<p><img src="${img}" alt="" /></p>`).join('\n');
       cleanHtmlWithImages = `${cleanHtmlWithImages}\n${imgTags}`;
     }
 
     return {
       title: finalTitle,
-      image: featuredImage || images[0] || null,
-      images: [...new Set(images)],
+      image: featuredImage || (filteredImages.length > 0 ? filteredImages[0] : null),
+      images: [...new Set(filteredImages)],
       content: cleanContent,
       contentHtml: cleanContent,
       cleanHtmlWithImages,
@@ -463,22 +485,59 @@ export class ZTTeamFetcherService {
           '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
           '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
           '.email-signup', '.newsletter-signup', '.see-also', '.read-next',
-          '#comments', '.conversations-container'
+          '#comments', '.conversations-container',
+          '.wp-block-nyp-editor-universal-promo', '.universal-promo__inner',
+          '.comments-inline-cta', '.comments-cta',
+          'hr.wp-block-separator', '.wp-block-separator'
         ].join(', ')
       ).remove();
 
-      // Loại bỏ các đoạn văn kêu gọi tải app / đăng ký newsletter / follow MXH
-      $('p').each((_, p) => {
-        const txt = $(p).text().trim();
-        if (
-          txt.includes('California Post News:') ||
-          txt.includes('California Post Sports') ||
-          txt.includes('Sign up here!') ||
-          txt.includes('Download here!') ||
-          txt.includes('Home delivery:') ||
-          txt.includes('See more of our coverage in your search results')
-        ) {
-          $(p).remove();
+      // Unwrap slideshow modal anchors around images
+      $('a[data-slideshow-modal], a[aria-controls="nyp-slideshow-modal"]').each((_, el) => {
+        $(el).replaceWith($(el).contents());
+      });
+      $('.nyp-slideshow-modal-image__wrapper').each((_, el) => {
+        $(el).replaceWith($(el).contents());
+      });
+      $('figure.nyp-slideshow-modal-image').removeClass('nyp-slideshow-modal-image');
+
+      // Loại bỏ triệt để các khối văn bản/heading/group kêu gọi tải app / newsletter / mạng xã hội
+      const isPromoText = (txt: string) => {
+        if (!txt) return false;
+        const lower = txt.toLowerCase();
+        return (
+          lower.includes('california post app') ||
+          lower.includes('download the california post app') ||
+          lower.includes('california post news:') ||
+          lower.includes('california post sports') ||
+          lower.includes('california post opinion') ||
+          lower.includes('california post newsletters') ||
+          lower.includes('follow us on social, and subscribe to our newsletters') ||
+          lower.includes('sign up here!') ||
+          lower.includes('download here!') ||
+          lower.includes('home delivery:') ||
+          lower.includes('page six hollywood') ||
+          lower.includes('see more of our coverage in your search results')
+        );
+      };
+
+      // Xóa các leaf elements (h1-h6, p, li, a) chứa promo text
+      $('h1, h2, h3, h4, h5, h6, p, li, a').each((_, el) => {
+        const txt = $(el).text().trim();
+        if (txt && isPromoText(txt)) {
+          $(el).remove();
+        }
+      });
+
+      // Xóa các wrapper group promo như .wp-block-group
+      $('.wp-block-group, div').each((_, el) => {
+        const $el = $(el);
+        if ($el.hasClass('entry-content') || $el.hasClass('single__content') || $el.hasClass('article-content')) {
+          return;
+        }
+        const txt = $el.text().trim();
+        if (!txt || isPromoText(txt)) {
+          $el.remove();
         }
       });
 
@@ -504,6 +563,12 @@ export class ZTTeamFetcherService {
 
         $(el).removeAttr('srcset').removeAttr('sizes').removeAttr('loading').removeAttr('data-src').removeAttr('data-srcset');
       });
+
+      // Bỏ bất kỳ ảnh / figure nào đứng ở đầu bài viết (trước đoạn văn đầu tiên)
+      const firstP = $('p').first();
+      if (firstP.length) {
+        firstP.prevAll('figure, img, div:has(img)').remove();
+      }
 
       return $('body').html() || $.html();
     } catch {
@@ -543,8 +608,11 @@ export class ZTTeamFetcherService {
       /** Remove search result disclosure and related promo */
       .replace(/^See more of our coverage in your search results\.?\s*$/gim, '')
       .replace(/^Explore More[^\n]*$/gim, '')
-      .replace(/(?:California Post|New York Post|Page Six)\s+(?:News|Sports|Opinion|Newsletters|App)[^\n]*/gi, '')
+      .replace(/Download (?:The )?California Post App[\s\S]*?(?:Sign up here!|Download here!|$)/gi, '')
+      .replace(/Download (?:The )?[A-Za-z\s]+ App, follow us on social[\s\S]*?(?:Sign up here!|Download here!|$)/gi, '')
+      .replace(/(?:California Post|New York Post|Page Six)\s+(?:News|Sports|Opinion|Newsletters|App)[\s\S]*?(?:Sign up here!|Download here!|\n\n|$)/gi, '')
       .replace(/(?:Sign up here!|Download here!|Home delivery:)[^\n]*/gi, '')
+      .replace(/Page Six Hollywood:?[^\n]*/gi, '')
       /** Remove viral engagement spam callouts */
       .replace(/(?:The story is still unfolding[^\n]*|Type\s*["“']?YES["”']?[^\n]*|Comment\s*["“']?YES["”']?[^\n]*|Drop a\s*["“']?YES["”']?[^\n]*|Follow for part\s*\d+[^\n]*|Like and follow for part\s*\d+[^\n]*)/gi, '')
       /** Remove disclaimer at the very end if present */
@@ -715,67 +783,62 @@ export class ZTTeamFetcherService {
         ($('div[itemprop="articleBody"]').length ? $('div[itemprop="articleBody"]') : null))));
 
       if (customContentEl) {
-        const clone = customContentEl.clone();
-        clone.find([
-          'script', 'style', 'noscript', 'iframe', 'svg', 'button', 'form', 'nav', 'header', 'footer',
-          '.sharedaddy', '.ads', '[data-widget-id]', '.comment-respond', '.post-meta', '.entry-meta',
-          '.author-box', '.breadcrumbs', '.social-share', '.article-meta', '.byline',
-          '.featured-image', '.featured-image__wrapper', '.nyp-video-player',
-          '.connatix-outstream-video', '#connatix-outstream-video', '.video-player', '[class*="video-player"]',
-          '[id*="jw-player"]', '[class*="jw-player"]', '.jwplayer', '#nyp-player-lcp-overlay', 'video',
-          '.single__inline-module', '.inline-module', 'aside',
-          '.ad-wrapper', '.ad-unit', '[id^="div-gpt-ad"]', '.commercial-unit',
-          '.nyp-slideshow-modal-image__icon', '.nyp-slideshow-modal-image-counter',
-          '.email-signup', '.newsletter-signup', '.see-also', '.read-next',
-          '#comments', '.conversations-container'
-        ].join(', ')).remove();
+        contentHtml = this.ztteam_cleanHtmlKeepImages(customContentEl.html() || '', url);
+      } else if (contentHtml) {
+        contentHtml = this.ztteam_cleanHtmlKeepImages(contentHtml, url);
+      } else {
+        contentHtml = this.ztteam_cleanHtmlKeepImages(html, url);
+      }
 
-        clone.find('p').each((_, p) => {
-          const txt = $(p).text().trim();
-          if (
-            txt.includes('California Post News:') ||
-            txt.includes('California Post Sports') ||
-            txt.includes('Sign up here!') ||
-            txt.includes('Download here!') ||
-            txt.includes('Home delivery:') ||
-            txt.includes('See more of our coverage in your search results')
-          ) {
-            $(p).remove();
-          }
-        });
-
-        const paragraphs: string[] = [];
-        clone.find('p').each((_, p) => {
-          const txt = $(p).text().trim().replace(/\s+/g, ' ');
-          if (txt && txt.length > 10) {
-            paragraphs.push(txt);
-          }
-        });
-
-        if (paragraphs.length >= 2) {
-          content = paragraphs.join('\n\n');
-        } else {
-          content = clone.text().replace(/\t/g, ' ').replace(/[ ]{2,}/g, ' ').replace(/\. ([A-Z])/g, '.\n\n$1').trim();
+      const content$ = cheerio.load(contentHtml);
+      const paragraphs: string[] = [];
+      content$('p').each((_, p) => {
+        const txt = content$(p).text().trim().replace(/\s+/g, ' ');
+        if (txt && txt.length > 10) {
+          paragraphs.push(txt);
         }
-        contentHtml = clone.html() || contentHtml;
+      });
+
+      if (paragraphs.length >= 2) {
+        content = paragraphs.join('\n\n');
+      } else {
+        content = content$.text().replace(/\t/g, ' ').replace(/[ ]{2,}/g, ' ').replace(/\. ([A-Z])/g, '.\n\n$1').trim();
       }
       content = this.ztteam_cleanStoryContent(content);
 
       let images: string[] = [];
-      const content$ = cheerio.load(contentHtml);
       content$('img').each((_, el) => {
-        let src = content$(el).attr('src') || content$(el).attr('data-src');
-        const rawSrcset = content$(el).attr('srcset') || content$(el).attr('data-srcset');
-        if ((!src || src.startsWith('data:')) && rawSrcset) {
-          const parts = rawSrcset.split(',').map(s => s.trim().split(' ')[0]).filter(Boolean);
-          if (parts.length > 0) {
-            src = parts[parts.length - 1];
-          }
-        }
+        let src = content$(el).attr('src');
         if (src && src.startsWith('http') && !src.startsWith('data:')) {
           images.push(src);
         }
       });
+
+      const isUnwantedCover = (u: string | null | undefined): boolean => {
+        if (!u) return true;
+        const lower = u.toLowerCase();
+        return (
+          lower.includes('collage') ||
+          lower.includes('newspress-collage') ||
+          lower.includes('video-player') ||
+          lower.includes('player-overlay') ||
+          lower.includes('header-banner') ||
+          lower.includes('placeholder') ||
+          lower.includes('default-image') ||
+          lower.includes('logo') ||
+          lower.includes('avatar')
+        );
+      };
+
+      if (image && isUnwantedCover(image)) {
+        image = null;
+      }
+
+      images = images.filter(img => !isUnwantedCover(img));
+
+      if (!image && images.length > 0) {
+        image = images[0];
+      }
 
       if (image) {
         const getBaseImg = (u: string) => {
@@ -794,13 +857,7 @@ export class ZTTeamFetcherService {
         throw new HttpException(`Không phải bài viết hợp lệ (${validation.reason})`, HttpStatus.BAD_REQUEST);
       }
 
-      /** ZTTeam: Chuẩn hóa HTML giữ lại ảnh bài viết cho website đích */
-      let cleanHtmlWithImages = '';
-      if (contentHtml) {
-        cleanHtmlWithImages = this.ztteam_cleanHtmlKeepImages(contentHtml, url);
-      } else {
-        cleanHtmlWithImages = this.ztteam_cleanHtmlKeepImages(html, url);
-      }
+      const cleanHtmlWithImages = contentHtml;
 
       return {
         title,
