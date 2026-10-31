@@ -471,6 +471,14 @@ export class ZTTeamPublisherCron {
         }
       });
 
+      if (page.token_status === 'checkpoint_required') {
+        await this.prisma.ztteam_pages.update({
+          where: { id: page.id },
+          data: { token_status: 'active' }
+        }).catch(() => {});
+        this.logger.log(`[CIRCUIT BREAKER] Page ${page.name} posted reel successfully -> cleared checkpoint_required to active`);
+      }
+
       this.eventEmitter.emit('reel.updated', { id: reel.id, status: 'POSTED', fb_post_id: response.id });
       this.logger.log(`Reel ${reel.id} successfully auto-published to page ${page.name}`);
     } catch (error: any) {
@@ -673,6 +681,14 @@ export class ZTTeamPublisherCron {
           post_retry_count: 0,
         }
       });
+
+      if (page.token_status === 'checkpoint_required') {
+        await this.prisma.ztteam_pages.update({
+          where: { id: page.id },
+          data: { token_status: 'active' }
+        }).catch(() => {});
+        this.logger.log(`[CIRCUIT BREAKER] Page ${page.name} posted image successfully -> cleared checkpoint_required to active`);
+      }
 
       this.logger.log(`Successfully published image ${image.id} to page ${page.name}, Post ID: ${fbPostId} (Comment Step 0 scheduled)`);
       this.eventEmitter.emit('image.posted', { imageId: image.id, pageId: page.id });

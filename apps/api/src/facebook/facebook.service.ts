@@ -630,13 +630,14 @@ export class ZTTeamFacebookService {
       orderBy: { name: 'asc' }
     });
 
-    /** ZTTeam: Nhận diện các Fanpage đang bị Facebook yêu cầu xác minh danh tính (Subcode 4854002) */
+    /**
+     * ZTTeam: Nhận diện các Fanpage thực sự đang bị Facebook yêu cầu xác minh danh tính (Subcode 4854002).
+     * Chỉ tính là bị chặn nếu:
+     * 1. token_status là 'checkpoint_required' HOẶC có bài lỗi 4854002 gần đây.
+     * 2. VÀ CHƯA CÓ bài viết nào đăng thành công (status: 'POSTED') sau thời điểm bị lỗi đó!
+     * Nếu đã có bài đăng thành công sau đó -> Checkpoint ĐÃ ĐƯỢC GIẢI QUYẾT, tự động gỡ cảnh báo và khôi phục token_status!
+     */
     const checkpointPageIds = new Set<string>();
-    pages.forEach(p => {
-      if (p.token_status === 'checkpoint_required') {
-        checkpointPageIds.add(p.id);
-      }
-    });
 
     try {
       const recentFailedPosts = await this.prisma.ztteam_images.findMany({
@@ -646,11 +647,55 @@ export class ZTTeamFacebookService {
           error_log: { contains: '4854002' },
           updated_at: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
         },
-        select: { page_id: true }
+        select: { page_id: true, updated_at: true },
+        orderBy: { updated_at: 'desc' }
       });
-      recentFailedPosts.forEach(post => {
-        if (post.page_id) checkpointPageIds.add(post.page_id);
-      });
+
+      const latestFailMap = new Map<string, Date>();
+      for (const post of recentFailedPosts) {
+        if (post.page_id && !latestFailMap.has(post.page_id)) {
+          latestFailMap.set(post.page_id, post.updated_at);
+        }
+      }
+
+      for (const p of pages) {
+        const failTime = latestFailMap.get(p.id);
+        const isMarkedCheckpoint = p.token_status === 'checkpoint_required';
+
+        if (isMarkedCheckpoint || failTime) {
+          const [hasLaterSuccessImage, hasLaterSuccessReel] = await Promise.all([
+            this.prisma.ztteam_images.findFirst({
+              where: {
+                page_id: p.id,
+                status: 'POSTED',
+                ...(failTime ? { posted_at: { gt: failTime } } : {})
+              },
+              select: { id: true }
+            }),
+            this.prisma.ztteam_reels.findFirst({
+              where: {
+                page_id: p.id,
+                status: 'POSTED',
+                ...(failTime ? { posted_at: { gt: failTime } } : {})
+              },
+              select: { id: true }
+            })
+          ]);
+
+          if (hasLaterSuccessImage || hasLaterSuccessReel) {
+            // Đã có bài đăng thành công sau thời điểm lỗi -> Checkpoint đã được giải quyết!
+            if (p.token_status === 'checkpoint_required') {
+              p.token_status = 'active';
+              await this.prisma.ztteam_pages.update({
+                where: { id: p.id },
+                data: { token_status: 'active' }
+              }).catch(() => {});
+            }
+          } else {
+            checkpointPageIds.add(p.id);
+          }
+        }
+      }
     } catch (e: any) {
       /** Bỏ qua lỗi phụ */
     }
@@ -746,21 +791,54 @@ export class ZTTeamFacebookService {
     const times = await this.ztteam_computePageTimesAndNextVideo(page);
 
     let isCheckpointBlocked = page.token_status === 'checkpoint_required';
-    if (!isCheckpointBlocked) {
-      try {
-        const recentFailed = await this.prisma.ztteam_images.findFirst({
-          where: {
-            page_id: page.id,
-            status: 'FAILED',
-            error_log: { contains: '4854002' },
-            updated_at: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
-          },
-          select: { id: true }
-        });
-        if (recentFailed) isCheckpointBlocked = true;
-      } catch (e: any) {
-        /** Bỏ qua lỗi phụ */
+    try {
+      const recentFailed = await this.prisma.ztteam_images.findFirst({
+        where: {
+          page_id: page.id,
+          status: 'FAILED',
+          error_log: { contains: '4854002' },
+          updated_at: { gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
+        },
+        select: { id: true, updated_at: true },
+        orderBy: { updated_at: 'desc' }
+      });
+
+      if (isCheckpointBlocked || recentFailed) {
+        const failTime = recentFailed?.updated_at;
+        const [hasLaterSuccessImage, hasLaterSuccessReel] = await Promise.all([
+          this.prisma.ztteam_images.findFirst({
+            where: {
+              page_id: page.id,
+              status: 'POSTED',
+              ...(failTime ? { posted_at: { gt: failTime } } : {})
+            },
+            select: { id: true }
+          }),
+          this.prisma.ztteam_reels.findFirst({
+            where: {
+              page_id: page.id,
+              status: 'POSTED',
+              ...(failTime ? { posted_at: { gt: failTime } } : {})
+            },
+            select: { id: true }
+          })
+        ]);
+
+        if (hasLaterSuccessImage || hasLaterSuccessReel) {
+          isCheckpointBlocked = false;
+          if (page.token_status === 'checkpoint_required') {
+            page.token_status = 'active';
+            await this.prisma.ztteam_pages.update({
+              where: { id: page.id },
+              data: { token_status: 'active' }
+            }).catch(() => {});
+          }
+        } else {
+          isCheckpointBlocked = true;
+        }
       }
+    } catch (e: any) {
+      /** Bỏ qua lỗi phụ */
     }
 
     return {
@@ -903,9 +981,17 @@ export class ZTTeamFacebookService {
       voice_speed: config.voice_speed,
     };
 
-    /** ZTTeam: Nếu người dùng bật lại tự động đăng, khôi phục token_status về active để xóa cảnh báo */
-    if (config.auto_publish_enabled === true && page.token_status === 'checkpoint_required') {
+    /** ZTTeam: Nếu người dùng bật lại tự động đăng, khôi phục token_status về active và xóa cảnh báo lỗi cũ */
+    if (config.auto_publish_enabled === true) {
       updateData.token_status = 'active';
+      await this.prisma.ztteam_images.updateMany({
+        where: { page_id: page.id, status: 'FAILED', error_log: { contains: '4854002' } },
+        data: { error_log: '[RESOLVED] Đã xác minh danh tính thành công' }
+      }).catch(() => {});
+      await this.prisma.ztteam_reels.updateMany({
+        where: { page_id: page.id, status: 'FAILED', error_log: { contains: '4854002' } },
+        data: { error_log: '[RESOLVED] Đã xác minh danh tính thành công' }
+      }).catch(() => {});
     }
 
     await this.prisma.ztteam_pages.update({

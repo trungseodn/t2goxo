@@ -361,6 +361,40 @@ export default function FacebookPageSettings() {
   };
 
   /** Save Settings */
+  const ztteam_handleResolveCheckpoint = async () => {
+    try {
+      setIsSaving(true);
+      setAutoPublishEnabled(true);
+      setIsCheckpointBlocked(false);
+      await api.put(`facebook/pages/${id}/settings`, {
+        tags,
+        post_format: postFormat,
+        video_engine: videoEngine,
+        default_reel_template_id: defaultReelTemplateId || 'random',
+        default_bgm: defaultBgm || null,
+        auto_publish_enabled: true,
+        add_link_to_caption: linkMode === 'immediate' && (linkTargetPosition === 'caption' || linkTargetPosition === 'both'),
+        add_link_to_comment: linkMode === 'immediate' && (linkTargetPosition === 'comment' || linkTargetPosition === 'both'),
+        link_mode: linkMode,
+        link_view_threshold: linkViewThreshold,
+        link_target_position: linkTargetPosition,
+        link_fallback_hours: linkFallbackHours,
+        link_fallback_action: linkFallbackAction,
+        schedule_mode: scheduleMode,
+        schedule_fixed_times: scheduleFixedTimes,
+        schedule_immediate_gap_minutes: scheduleImmediateGap,
+        auto_create_enabled: false,
+        sources
+      });
+      ztteam_showToast('Đã gỡ cảnh báo và bật lại tự động đăng thành công!', 'success');
+      ztteam_fetchPageSettings();
+    } catch (error: any) {
+      ztteam_showToast(error.response?.data?.message || 'Lỗi lưu cấu hình', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const ztteam_handleSave = async () => {
     try {
       setIsSaving(true);
@@ -862,19 +896,25 @@ export default function FacebookPageSettings() {
               </div>
 
               {isCheckpointBlocked && (
-                <div className="bg-amber-500/10 p-4 rounded-xl border border-amber-500/30 text-xs text-amber-200 space-y-2">
+                <div className="bg-amber-500/10 p-4 rounded-xl border border-amber-500/30 text-xs text-amber-200 space-y-3">
                   <div className="flex items-center gap-2 font-bold text-amber-400 text-sm">
                     <span className="material-symbols-outlined text-[20px]">shield_lock</span>
-                    <span>Fanpage đang bị Facebook tạm chặn đăng (Mã 368 / Subcode 4854002)</span>
+                    <span>Fanpage đang có cảnh báo xác minh danh tính (Subcode 4854002)</span>
                   </div>
                   <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Hệ thống đã tự động kích hoạt Circuit Breaker tắt tự động đăng để bảo vệ BM và các Page khác. Để tiếp tục xuất bản:
+                    Facebook từng tạm khóa do yêu cầu xác nhận danh tính trên điện thoại. Nếu bạn đã hoàn tất xác nhận trên điện thoại (hoặc Page đã đăng bài bình thường), hãy bấm nút bên dưới để gỡ ngay thông báo cảnh báo này và bật lại chế độ tự động đăng.
                   </p>
-                  <ol className="list-decimal list-inside text-[11px] text-amber-300 space-y-1 bg-black/30 p-2.5 rounded-lg border border-amber-500/20 font-medium">
-                    <li>Mở app Facebook trên điện thoại Admin ➔ Chuyển sang Page <b>{pageName}</b></li>
-                    <li>Đăng thử 1 bài viết ("Test") ➔ Hoàn tất thông báo xác nhận danh tính trên điện thoại</li>
-                    <li>Quay lại đây, gạt bật lại nút <b>"Tự động đăng"</b> ở trên và bấm <b>Lưu cài đặt</b></li>
-                  </ol>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={ztteam_handleResolveCheckpoint}
+                      disabled={isSaving}
+                      className="px-3.5 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:opacity-95 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">verified</span>
+                      <span>Tôi đã xác minh xong — Gỡ cảnh báo &amp; Bật tự động đăng</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
