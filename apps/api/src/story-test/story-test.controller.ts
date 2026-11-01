@@ -135,13 +135,4 @@ export class ZTTeamStoryTestController {
       scriptData: body.scriptData,
     });
   }
-
-  /**
-   * Lấy thông tin tài khoản và hạn mức SangTao.ai
-   */
-  @Get('sangtao-quota')
-  async ztteam_getSangTaoQuota() {
-    return this.storyTestService.ztteam_getSangTaoQuota();
-  }
 }
-

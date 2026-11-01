@@ -2679,7 +2679,7 @@ export class ZTTeamFacebookService {
   }
 
   /**
-   * ZTTeam: Tạo ảnh bằng Google Gemini API thay thế hoàn toàn SangTao.ai
+   * ZTTeam: Tạo ảnh bằng Google Gemini API
    * Hỗ trợ model gemini-2.5-flash-image, imagen-3.0 và gemini-2.0-flash
    */
   async ztteam_renderImageWithGemini(prompt: string, aspectRatio: '1:1' | '16:9'): Promise<{
@@ -2786,7 +2786,7 @@ export class ZTTeamFacebookService {
   }
 
   /**
-   * ZTTeam: Tạo ảnh bằng Gemini (thay thế SangTao.ai)
+   * ZTTeam: Tạo ảnh bằng Gemini
    */
   async ztteam_renderImageSmartFallback(prompt: string, aspectRatio: '1:1' | '16:9'): Promise<{
     imageUrl: string;

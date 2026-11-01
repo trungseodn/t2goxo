@@ -862,7 +862,7 @@ export default function FacebookPageSettings() {
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
             activeTab === 4 ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' : 'bg-fb-surface-hover text-fb-text border-white/5'
           }`}>
-            SangTao 2K
+            Gemini AI
           </span>
         </button>
       </div>

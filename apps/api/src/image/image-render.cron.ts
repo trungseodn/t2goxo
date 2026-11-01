@@ -17,12 +17,12 @@ export class ZTTeamImageRenderCron implements OnApplicationBootstrap {
   ) {}
 
   onApplicationBootstrap() {
-    this.logger.log('Legacy Auto-Image Render Cron is decommissioned in favor of ZTTeamCrawlerCron (SangTao.ai 2K Pipeline).');
+    this.logger.log('Legacy Auto-Image Render Cron is decommissioned in favor of ZTTeamCrawlerCron.');
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
   async ztteam_handleCron() {
-    /** Decommissioned: Image creation is 100% handled via ZTTeamCrawlerCron and SangTao.ai 2K Pipeline */
+    /** Decommissioned: Image creation is 100% handled via ZTTeamCrawlerCron */
     return;
   }
 

@@ -97,8 +97,8 @@ export class ZTTeamImageProcessor implements OnModuleInit {
     fs.mkdirSync(workDir, { recursive: true });
 
     try {
-      /** ========== 100% SangTao.ai 2K Pipeline ========== */
-      await this.ztteam_processSangTao2kJob(imageId, pageId, wpPostId);
+      /** ========== Image Render Pipeline ========== */
+      await this.ztteam_processImageRenderJob(imageId, pageId, wpPostId);
       return;
     } catch (error: any) {
       this.logger.error(`Image render failed for ${imageId}: ${error.message}`);
@@ -201,11 +201,11 @@ export class ZTTeamImageProcessor implements OnModuleInit {
   }
 
   /**
-   * Render or Re-render 2K Image using SangTao.ai with modern 2026 prompt
-   * Deletes old local image and old WordPress media, uploads new 2K image, and updates featured_media
+   * Render or Re-render Image with modern prompt
+   * Deletes old local image and old WordPress media, uploads new image, and updates featured_media
    */
-  private async ztteam_processSangTao2kJob(imageId: string, pageId: string, wpPostId: string): Promise<void> {
-    this.logger.log(`Executing SangTao.ai 2K render for image ${imageId}`);
+  private async ztteam_processImageRenderJob(imageId: string, pageId: string, wpPostId: string): Promise<void> {
+    this.logger.log(`Executing image render job for image ${imageId}`);
     const image = await this.prisma.ztteam_images.findUnique({
       where: { id: imageId },
       include: { page: true },
@@ -285,7 +285,7 @@ export class ZTTeamImageProcessor implements OnModuleInit {
       '4:5',
     );
 
-    /** 2. Render 2K Image via SangTao.ai */
+    /** 2. Render image via image pipeline */
     const imageResult = await this.storyTestService.ztteam_renderStoryImage({
       prompt: promptData.image_prompt_en,
       aspectRatio: '4:5',
@@ -381,13 +381,13 @@ export class ZTTeamImageProcessor implements OnModuleInit {
     await this.ztteam_updateImage(imageId, {
       status: 'COMPLETED',
       image_url: localUrl,
-      template_id: 'sangtao_2k',
+      template_id: 'source_original',
       ai_caption: finalCaption,
       ai_first_comment: finalComment,
       error_log: null,
     });
 
-    this.logger.log(`===== SANGTAO 2K RENDER COMPLETE: image=${imageId}, local=${localUrl}, wp=${uploadedMediaUrl || 'N/A'} =====`);
+    this.logger.log(`===== IMAGE RENDER COMPLETE: image=${imageId}, local=${localUrl}, wp=${uploadedMediaUrl || 'N/A'} =====`);
   }
 
   /**
