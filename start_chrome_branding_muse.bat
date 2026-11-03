@@ -39,3 +39,4 @@ echo   Vui long dang nhap Muse.ai tren cua so Chrome vua mo.
 echo   Sau khi dang nhap xong, chay tiep: start_muse_branding_worker.bat
 echo ========================================================
 pause
+
