@@ -13,6 +13,16 @@ export class ZTTeamAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
+    const reqPath = request.path || request.url || '';
+    if (
+      reqPath.includes('/branding/pending-job') || 
+      reqPath.includes('/branding/heartbeat') || 
+      reqPath.includes('/branding/queue-status') || 
+      reqPath.includes('/branding/queue-reset') || 
+      (reqPath.includes('/branding/') && (reqPath.includes('/attach-result') || reqPath.includes('/reset')))
+    ) {
+      return true;
+    }
     const token = this.ztteam_extractTokenFromHeader(request);
     
     if (!token) {
