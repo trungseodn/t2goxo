@@ -4,6 +4,8 @@ chcp 65001 >nul
 title ZTTeam Muse Branding Worker (Port 9245) - t2.goxo.us
 cd /d "%~dp0"
 
+set "NODE_PATH=%~dp0node_modules;D:\projects\t4.goxo.us\node_modules;%NODE_PATH%"
+
 echo ========================================================
 echo   ZTTeam Muse Branding Worker - Avatar va Cover (Port 9245)
 echo   He thong: https://t2.goxo.us

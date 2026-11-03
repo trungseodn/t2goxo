@@ -6,22 +6,43 @@
  * Tránh hoàn toàn xung đột cổng với các worker Reel/Video khác.
  */
 
+const fs = require('fs');
+const path = require('path');
+
+function smartRequire(name) {
+  try {
+    return require(name);
+  } catch (e) {
+    const candidates = [
+      path.resolve(__dirname, '../node_modules', name),
+      path.resolve('D:/projects/t4.goxo.us/node_modules', name),
+      path.resolve('D:/projects/t4-reel/node_modules', name),
+      path.resolve('D:/projects/trung-reel/node_modules', name),
+      path.resolve('D:/projects/linh.goxo.us/node_modules', name),
+    ];
+    for (const c of candidates) {
+      try {
+        return require(c);
+      } catch (err) {}
+    }
+    throw e;
+  }
+}
+
 let puppeteer;
 try {
-  puppeteer = require('puppeteer-core');
+  puppeteer = smartRequire('puppeteer-core');
 } catch (e1) {
   try {
-    puppeteer = require('puppeteer');
+    puppeteer = smartRequire('puppeteer');
   } catch (e2) {
     console.error('\n❌ LỖI: Chưa tìm thấy thư viện puppeteer-core hoặc puppeteer!');
     process.exit(1);
   }
 }
 
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const FormData = require('form-data');
+const axios = smartRequire('axios');
+const FormData = smartRequire('form-data');
 
 /** Đọc tham số dòng lệnh */
 const args = process.argv.slice(2);
