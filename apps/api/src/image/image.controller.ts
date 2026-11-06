@@ -106,12 +106,15 @@ export class ZTTeamImageController {
       where.id = { in: body.ids };
     }
 
-    const failedPosts = await this.prisma.ztteam_images.findMany({
+    const updateResult = await this.prisma.ztteam_images.updateMany({
       where,
-      include: { page: true },
+      data: {
+        video_status: 'PENDING',
+        error_log: null,
+      },
     });
 
-    if (failedPosts.length === 0) {
+    if (updateResult.count === 0) {
       return {
         success: true,
         count: 0,
@@ -119,31 +122,12 @@ export class ZTTeamImageController {
       };
     }
 
-    let queuedCount = 0;
-    for (const post of failedPosts) {
-      try {
-        const engine = (post.page as any)?.video_engine || 'hook_image';
-        const updated = await this.prisma.ztteam_images.update({
-          where: { id: post.id },
-          data: { video_status: 'PENDING', error_log: null },
-        });
-        this.eventEmitter.emit('image.updated', updated);
-
-        if (engine === 'hook_image' || engine === 'text_story') {
-          this.hookVideoService.ztteam_renderHookVideo(post.id).catch(err => {
-            this.logger.error(`[Batch Retry Hook/Text Story Error] ${post.id}: ${err.message}`);
-          });
-        }
-        queuedCount++;
-      } catch (err: any) {
-        this.logger.error(`[Retry Failed Video Error] ${post.id}: ${err.message}`);
-      }
-    }
+    this.logger.log(`[Batch Retry Failed Videos] Đã chuyển ${updateResult.count} video lỗi sang PENDING`);
 
     return {
       success: true,
-      count: queuedCount,
-      message: `Đã đưa ${queuedCount} video lỗi về lại hàng chờ tạo video thành công.`,
+      count: updateResult.count,
+      message: `Đã đưa ${updateResult.count} video lỗi về lại hàng chờ tạo video thành công.`,
     };
   }
 

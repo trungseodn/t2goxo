@@ -74,40 +74,46 @@ export class ZTTeamRenderCron implements OnApplicationBootstrap {
    */
   private async ztteam_autoRenderPendingVideos() {
     try {
-      /** ZTTeam: Chỉ tự động render Hook Video cho các Page cấu hình hook_image hoặc text_story. TUYỆT ĐỐI không chạm vào bài của Page Muse! */
-      const pendingImages = await this.prisma.ztteam_images.findMany({
-        where: {
-          is_posted: false,
-          status: { not: 'POSTED' },
-          video_status: 'PENDING',
-          OR: [
-            { page_id: null },
-            {
-              page: {
-                video_engine: { in: ['hook_image', 'text_story'] },
+      const startTime = Date.now();
+      const maxDurationMs = 50 * 1000;
+      let renderedInBatch = 0;
+
+      while (Date.now() - startTime < maxDurationMs) {
+        /** ZTTeam: Chỉ tự động render Hook Video cho các Page cấu hình hook_image hoặc text_story. TUYỆT ĐỐI không chạm vào bài của Page Muse! */
+        const pendingImages = await this.prisma.ztteam_images.findMany({
+          where: {
+            is_posted: false,
+            status: { not: 'POSTED' },
+            video_status: 'PENDING',
+            OR: [
+              { page_id: null },
+              {
+                page: {
+                  video_engine: { in: ['hook_image', 'text_story'] },
+                },
               },
-            },
-          ],
-        },
-        include: { page: true },
-        orderBy: { created_at: 'desc' },
-        take: 2,
-      });
+            ],
+          },
+          include: { page: true },
+          orderBy: { created_at: 'desc' },
+          take: 1,
+        });
 
-      if (pendingImages.length === 0) return;
+        if (pendingImages.length === 0) break;
 
-      this.logger.log(`[Auto Hook Video Worker] Tìm thấy ${pendingImages.length} bài viết PENDING (chưa đăng), bắt đầu tự động render...`);
-
-      for (const img of pendingImages) {
+        const img = pendingImages[0];
         try {
           const res = await this.hookVideoService.ztteam_renderHookVideo(img.id);
           if (res.success) {
+            renderedInBatch++;
             this.logger.log(`[Auto Hook Video Worker] Render thành công video cho bài ${img.id} (Page: ${img.page?.name || 'Manual Studio'}): ${res.videoUrl}`);
           } else {
             this.logger.warn(`[Auto Hook Video Worker] Render bài ${img.id} trả về lỗi: ${res.error}`);
+            break;
           }
         } catch (err: any) {
           this.logger.error(`[Auto Hook Video Worker] Lỗi render bài ${img.id}: ${err.message}`);
+          break;
         }
       }
     } catch (e: any) {
