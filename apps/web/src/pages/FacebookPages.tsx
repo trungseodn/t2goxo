@@ -1007,7 +1007,8 @@ export default function FacebookPages() {
     }
   };
 
-  const expiredPagesCount = pages.filter(p => p.status === 'expired').length;
+  const expiredPages = pages.filter(p => p.isActive !== false && p.status === 'expired');
+  const expiredPagesCount = expiredPages.length;
   const totalFollowers = activePages.reduce((acc, p) => acc + (p.followersCount || 0), 0);
   const formattedFollowers = totalFollowers > 1000000 ? (totalFollowers / 1000000).toFixed(1) + 'M' :
     totalFollowers > 1000 ? (totalFollowers / 1000).toFixed(1) + 'k' : totalFollowers;
@@ -1078,8 +1079,19 @@ export default function FacebookPages() {
               <span className="material-symbols-outlined text-xl">error</span>
             </div>
             <div>
-              <p className="font-extrabold text-sm text-red-400"><span className="material-symbols-outlined text-[18px] text-rose-400 align-middle mr-1">warning</span>CẢNH BÁO: Phát hiện {expiredPagesCount} Fanpage / Nick Facebook bị lỗi Token!</p>
+              <p className="font-extrabold text-sm text-red-400"><span className="material-symbols-outlined text-[18px] text-rose-400 align-middle mr-1">warning</span>CẢNH BÁO: Phát hiện {expiredPagesCount} Fanpage bị lỗi Token!</p>
               <p className="text-xs text-red-300 mt-0.5">Token hết hạn hoặc Nick bị checkpoint. Vui lòng "Quét Lỗi Token" &amp; Kết nối lại ngay để không làm gián đoạn tự động hóa.</p>
+              {expiredPages.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                  <span className="text-[11px] text-red-300/80 font-medium">Trang lỗi:</span>
+                  {expiredPages.map(p => (
+                    <span key={p.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-red-500/20 text-red-300 text-xs font-bold border border-red-500/30">
+                      <span className="material-symbols-outlined text-[13px]">flag</span>
+                      {p.name} {p.businessName ? `(${p.businessName})` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
           <button
@@ -1389,7 +1401,13 @@ export default function FacebookPages() {
             </div>
             <div>
               <h4 className="font-extrabold text-base text-fb-text">Cảnh báo Token hết hạn</h4>
-              <p className="text-xs text-fb-text-muted mt-1">{expiredPagesCount} Fanpage của bạn cần được kết nối lại để tiếp tục quy trình tự động hóa Reels.</p>
+              <p className="text-xs text-fb-text-muted mt-1">
+                {expiredPagesCount} Fanpage của bạn cần được kết nối lại để tiếp tục quy trình tự động hóa Reels:
+                {' '}
+                <span className="text-red-300 font-semibold">
+                  {expiredPages.map(p => `${p.name} (${p.businessName || 'Cá nhân'})`).join(', ')}
+                </span>
+              </p>
               <button onClick={ztteam_loginWithFacebook} className="mt-3 text-red-400 hover:text-red-300 font-bold text-xs flex items-center gap-1">
                 <span>Gia hạn tất cả ngay</span>
                 <span className="material-symbols-outlined text-sm">arrow_forward</span>
