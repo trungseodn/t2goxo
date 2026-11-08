@@ -210,7 +210,7 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
         maxArticlesPerCycle = Math.max(1, Math.min(20, parseInt(rules.batchSize, 10)));
       }
       if (rules.maxScanPages && Number(rules.maxScanPages) > 0) {
-        maxScanPages = Math.max(5, Math.min(50, parseInt(rules.maxScanPages, 10)));
+        maxScanPages = Math.max(1, Math.min(500, parseInt(rules.maxScanPages, 10)));
       }
       keepContentImages = Boolean(rules.keepContentImages);
     } catch (e) {}
@@ -225,6 +225,7 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
     let explicitPageLinks: string[] = [];
     let detectedLoadMoreData: any = null;
     let wpRestAvailable: boolean | null = null;
+    let wpTotalPages: number | null = null;
     let isRssSource = false;
     let scannedPagesCount = 0;
 
@@ -251,9 +252,14 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
 
       // Kiểm tra WP REST API nếu chưa thử hoặc đã xác nhận có
       if (wpRestAvailable !== false) {
+        if (wpTotalPages !== null && p > wpTotalPages) {
+          this.logger.log(`[Trang ${p}/${maxScanPages}] Đã quét hết toàn bộ ${wpTotalPages} trang của WordPress REST API. Hoàn thành quét sâu cho ${source.source_url}.`);
+          break;
+        }
         const wpResult = await this.fetcherService.ztteam_fetchWpRestApiPosts(source.source_url, p, 20);
         if (wpResult && wpResult.articles.length > 0) {
           wpRestAvailable = true;
+          wpTotalPages = wpResult.totalPages;
           pageArticles = wpResult.articles;
           this.logger.log(`[Trang ${p}/${maxScanPages}] WP REST API trả về ${pageArticles.length} bài viết (Tổng số trang: ${wpResult.totalPages})`);
         } else if (p === 1) {

@@ -235,16 +235,20 @@ export default function WordPressSites() {
 
   const ztteam_handleSubmitSource = async (e: React.FormEvent, siteId: string) => {
     e.preventDefault();
+    const safeMaxScanPages = (typeof maxScanPages === 'number' && !isNaN(maxScanPages) && maxScanPages > 0)
+      ? Math.max(1, Math.min(500, maxScanPages))
+      : 20;
+
     try {
       if (editingSourceId) {
-        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages });
+        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages });
         ztteam_showToast('Cập nhật website nguồn thành công', 'success');
       } else {
         const urls = sourceUrl.split('\n').map(u => u.trim()).filter(u => u);
         let successCount = 0;
         for (const url of urls) {
           try {
-            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages });
+            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages });
             successCount++;
           } catch (e) {
             console.error(`Failed to add source ${url}`, e);
@@ -738,22 +742,56 @@ export default function WordPressSites() {
                               </div>
 
                               <div className="md:col-span-2">
-                                <div className="flex items-center justify-between p-3.5 bg-fb-surface rounded-2xl border border-white/5">
-                                  <div>
-                                    <span className="text-xs font-bold text-fb-text block">Độ sâu phân trang & Load More</span>
-                                    <span className="text-[11px] text-fb-text-muted block mt-0.5">Số trang tối đa bot sẽ quét sâu qua phân trang hoặc nút Load More để vét sạch bài cũ.</span>
+                                <div className="p-3.5 bg-fb-surface rounded-2xl border border-white/5 space-y-2.5">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <span className="text-xs font-bold text-fb-text block">Độ sâu phân trang & Load More</span>
+                                      <span className="text-[11px] text-fb-text-muted block mt-0.5">Số trang tối đa bot sẽ quét sâu qua phân trang hoặc nút Load More để vét sạch bài cũ (Mặc định: 20 trang, tối đa: 500 trang).</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={500}
+                                        value={maxScanPages}
+                                        onChange={(e) => {
+                                          const v = e.target.value;
+                                          if (v === '') {
+                                            setMaxScanPages('' as any);
+                                          } else {
+                                            const parsed = parseInt(v, 10);
+                                            setMaxScanPages(isNaN(parsed) ? 20 : Math.max(1, Math.min(500, parsed)));
+                                          }
+                                        }}
+                                        onBlur={() => {
+                                          if (!maxScanPages || isNaN(Number(maxScanPages))) {
+                                            setMaxScanPages(20);
+                                          }
+                                        }}
+                                        className="w-20 py-1.5 px-3 rounded-full bg-fb-surface-hover text-fb-text text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-fb-blue border border-white/10"
+                                        required
+                                      />
+                                      <span className="text-xs text-fb-text-muted font-bold">trang</span>
+                                    </div>
                                   </div>
-                                  <div className="flex items-center gap-1.5 shrink-0">
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      max={50}
-                                      value={maxScanPages}
-                                      onChange={(e) => setMaxScanPages(Math.max(1, Math.min(50, parseInt(e.target.value) || 20)))}
-                                      className="w-16 py-1 px-2.5 rounded-full bg-fb-surface-hover text-fb-text text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-fb-blue border border-white/10"
-                                      required
-                                    />
-                                    <span className="text-xs text-fb-text-muted font-bold">trang</span>
+
+                                  {/** Các nút chọn nhanh số trang phổ biến */}
+                                  <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-white/5">
+                                    <span className="text-[10px] text-fb-text-muted font-bold uppercase tracking-wider mr-1">Chọn nhanh:</span>
+                                    {[20, 50, 100, 200, 500].map((preset) => (
+                                      <button
+                                        key={preset}
+                                        type="button"
+                                        onClick={() => setMaxScanPages(preset)}
+                                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold transition-all border ${
+                                          Number(maxScanPages) === preset
+                                            ? 'bg-fb-blue text-white border-fb-blue shadow-sm'
+                                            : 'bg-fb-surface-hover/60 text-fb-text-muted hover:text-white border-white/5 hover:bg-fb-surface-hover'
+                                        }`}
+                                      >
+                                        {preset === 20 ? `${preset} trang (Mặc định)` : `${preset} trang`}
+                                      </button>
+                                    ))}
                                   </div>
                                 </div>
                               </div>

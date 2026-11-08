@@ -500,7 +500,7 @@ export class ZTTeamCrawlerService {
         addLinkToComment: data.addLinkToComment !== undefined ? data.addLinkToComment : true,
         batchSize: data.batchSize ? Math.max(1, Math.min(20, Number(data.batchSize))) : 1,
         keepContentImages: Boolean(data.keepContentImages),
-        maxScanPages: data.maxScanPages ? Math.max(1, Math.min(50, Number(data.maxScanPages))) : 20,
+        maxScanPages: data.maxScanPages ? Math.max(1, Math.min(500, Number(data.maxScanPages))) : 20,
       };
       return await this.prisma.ztteam_crawl_sources.create({
         data: {
@@ -538,7 +538,7 @@ export class ZTTeamCrawlerService {
       extractRules.keepContentImages = Boolean(data.keepContentImages);
     }
     if (data.maxScanPages !== undefined) {
-      extractRules.maxScanPages = Math.max(1, Math.min(50, Number(data.maxScanPages)));
+      extractRules.maxScanPages = Math.max(1, Math.min(500, Number(data.maxScanPages) || 20));
     }
 
     return this.prisma.ztteam_crawl_sources.update({
