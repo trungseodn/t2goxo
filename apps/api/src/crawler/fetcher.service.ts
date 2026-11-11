@@ -260,12 +260,248 @@ export class ZTTeamFetcherService {
   }
 
   /**
-   * ZTTeam: Kiểm duyệt chất lượng nội dung bài viết câu chuyện trước khi xuất bản.
-   * Đảm bảo không phải trang chuyên mục (như "News"), trang 404/Cloudflare, hoặc nội dung quá ngắn.
+   * ZTTeam: Nhận diện nhanh URL hoặc Tiêu đề thuộc dạng Tin tức (News/Chính trị/Thể thao/Chứng khoán/Showbiz/Tai nạn).
+   * Giúp lọc bỏ ngay từ khâu quét link, không cần tốn thời gian tải bài viết.
    */
-  ztteam_validateStoryArticle(title: string, content: string): { isValid: boolean; reason?: string } {
+  ztteam_isQuickNewsReject(url: string, title?: string): { isNews: boolean; reason?: string } {
+    const rawUrl = (url || '').toLowerCase();
+    const rawTitle = (title || '').trim();
+
+    // 1. Kiểm tra cấu trúc URL chứa chuyên mục tin tức đặc thù
+    const newsPathPatterns = [
+      /\/politics\//i,
+      /\/chinh-tri\//i,
+      /\/sports\//i,
+      /\/the-thao\//i,
+      /\/crypto\//i,
+      /\/stock\//i,
+      /\/markets\//i,
+      /\/finance\//i,
+      /\/kinh-te\//i,
+      /\/breaking-news\//i,
+      /\/weather\//i,
+      /\/crime\//i,
+      /\/world-news\//i,
+      /\/celebrity-news\//i,
+    ];
+
+    for (const pat of newsPathPatterns) {
+      if (pat.test(rawUrl)) {
+        return { isNews: true, reason: `URL chứa đường dẫn tin tức chuyên mục (${pat.toString()})` };
+      }
+    }
+
+    if (!rawTitle) {
+      return { isNews: false };
+    }
+
+    // 2. Nếu có tiêu đề, kiểm tra các từ khóa tin tức đặc thù
+    // Nếu tiêu đề chứa từ ngữ câu chuyện gia đình (husband, wife, mother-in-law...) thì không vội coi là tin tức!
+    const hasStoryRelation = /\b(husband|wife|mother|father|mom|dad|daughter|son|in-law|mother-in-law|father-in-law|daughter-in-law|son-in-law|ex-husband|ex-wife|grandma|grandmother|grandpa|grandfather|chồng|vợ|mẹ chồng|mẹ|bố|con gái|con trai)\b/i.test(rawTitle);
+
+    // News tag tiền tố: [Live], Breaking:, Update:, Match Recap:
+    const hasNewsPrefix = /^\[?(live|breaking|breaking news|update|watch live|press release|match recap)\]?[:\-—\s]/i.test(rawTitle);
+    if (hasNewsPrefix && !hasStoryRelation) {
+      return { isNews: true, reason: `Tiêu đề có tiền tố tin tức (${rawTitle.slice(0, 30)})` };
+    }
+
+    // Thể thao: Real Madrid vs Barcelona, Liverpool vs Chelsea,...
+    const hasSportsVs = /\b([A-Z][a-z]+|\bFC\b|\bUnited\b|\bCity\b)\s+(vs\.?|versus)\s+([A-Z][a-z]+|\bFC\b|\bUnited\b|\bCity\b)\b/i.test(rawTitle);
+    if (hasSportsVs) {
+      return { isNews: true, reason: `Tiêu đề trận đấu thể thao (vs)` };
+    }
+
+    // Chính trị / Chiến sự lớn (nếu không có yếu tố quan hệ gia đình)
+    const hasHardNewsEntity = /\b(trump|biden|kamala|harris|putin|zelensky|netanyahu|white house|pentagon|supreme court|gop|presidential campaign|ceasefire|airstrike|airstrikes|missile strike|hamas|hezbollah|gaza war|israel-hamas|russia-ukraine|bầu cử|quốc hội|thủ tướng|tổng thống)\b/i.test(rawTitle);
+    if (hasHardNewsEntity && !hasStoryRelation) {
+      return { isNews: true, reason: `Tiêu đề chứa nhân vật/sự kiện chính trị hoặc chiến sự` };
+    }
+
+    // Chứng khoán / Crypto thời sự
+    const hasFinanceNews = /\b(stock market|stocks? (surge|tumble|plunge|drop|rally|fall)|wall street|dow jones|s&p 500|nasdaq|federal reserve|interest rates?|inflation rate|crypto crash|bitcoin (surges?|hits?|plunges?)|thị trường chứng khoán|giá vàng hôm nay)\b/i.test(rawTitle);
+    if (hasFinanceNews) {
+      return { isNews: true, reason: `Tiêu đề tin tức tài chính, thị trường hoặc crypto` };
+    }
+
+    // Báo cáo tai nạn / điều tra tội phạm thời sự của cảnh sát
+    const hasPoliceCrimeNews = /\b(police (say|arrest|investigate)|suspect arrested|suspect in custody|charged with (murder|theft|fraud)|fatal crash|highway crash kills|plane crash kills|mass shooting|shooting leaves \d+ (dead|injured)|sentenced to \d+ years in prison|tai nạn giao thông nghiêm trọng|bắt giữ đối tượng)\b/i.test(rawTitle);
+    if (hasPoliceCrimeNews && !hasStoryRelation) {
+      return { isNews: true, reason: `Tiêu đề tin tức tai nạn/điều tra án của cảnh sát` };
+    }
+
+    return { isNews: false };
+  }
+
+  /**
+   * ZTTeam: Đánh giá chuyên sâu nội dung bài viết là Câu chuyện (Story) hay Tin tức (News).
+   * Phân tích đối chiếu:
+   * - Tín hiệu tin tức: thông tấn xã (AP, Reuters), tuyên bố quan chức, cảnh sát điều tra, thể thao, chính trị, thị trường.
+   * - Tín hiệu câu chuyện: quan hệ gia đình/cá nhân, giọng kể ngôi thứ nhất (I, my, me), lời thoại ("..."), xung đột tình cảm/drama.
+   */
+  ztteam_evaluateStoryVsNews(
+    title: string,
+    content: string,
+    url: string = ''
+  ): { isStory: boolean; isAmbiguous: boolean; reason: string; newsScore: number; storyScore: number } {
+    const rawTitle = (title || '').trim();
+    const rawContent = (content || '').trim();
+
+    // 1. Kiểm tra nhanh URL & Tiêu đề
+    const quickCheck = this.ztteam_isQuickNewsReject(url, rawTitle);
+    if (quickCheck.isNews) {
+      return {
+        isStory: false,
+        isAmbiguous: false,
+        reason: quickCheck.reason || 'Nhận diện tin tức từ tiêu đề/URL',
+        newsScore: 10,
+        storyScore: 0,
+      };
+    }
+
+    let newsScore = 0;
+    let storyScore = 0;
+    const newsReasons: string[] = [];
+    const storyReasons: string[] = [];
+
+    // --- TÍN HIỆU CÂU CHUYỆN (STORY SIGNALS) ---
+    // A. Tiêu đề trích dẫn trực tiếp lời thoại: "..." hoặc “...”
+    if (/^["“].+["”]/.test(rawTitle)) {
+      storyScore += 8;
+      storyReasons.push('Tiêu đề có lời thoại trực tiếp');
+    }
+
+    // B. Tiêu đề có đại từ ngôi thứ nhất + quan hệ gia đình / kịch tính
+    const titleFirstPersonFamily = /\b(my (husband|wife|daughter|son|mother|father|mom|dad|mother-in-law|father-in-law|daughter-in-law|son-in-law|ex-husband|ex-wife|brother|sister|grandmother|grandpa|in-laws)|chồng tôi|vợ tôi|mẹ tôi|bố tôi|mẹ chồng tôi|con gái tôi)\b/i.test(rawTitle);
+    if (titleFirstPersonFamily) {
+      storyScore += 8;
+      storyReasons.push('Tiêu đề ngôi thứ nhất về gia đình/quan hệ');
+    }
+
+    // C. Tiêu đề có hành động kịch tính ngôi thứ nhất: "I found...", "I learned...", "I discovered...", "She told me..."
+    const titleFirstPersonAction = /\b(i (found|learned|discovered|heard|knew|stood|froze|cried|walked|opened|decided|realized|signed|changed)|she told me|he whispered|handed me|warned me)\b/i.test(rawTitle);
+    if (titleFirstPersonAction) {
+      storyScore += 7;
+      storyReasons.push('Tiêu đề có hành động tự sự kịch tính');
+    }
+
+    // D. Từ khóa mối quan hệ gia đình & tình cảm trong thân bài
+    const familyMatches = rawContent.match(/\b(husband|wife|mother|father|mom|dad|daughter|son|mother-in-law|father-in-law|daughter-in-law|son-in-law|in-laws|ex-husband|ex-wife|grandma|grandmother|grandpa|grandfather|brother|sister|fiancé|fiancee|bride|groom|marriage|divorce|wedding|chồng|vợ|mẹ|bố|cha|con gái|con trai|mẹ chồng|bố chồng|nàng dâu|hôn nhân|ly hôn)\b/gi) || [];
+    if (familyMatches.length >= 8) {
+      storyScore += 6;
+      storyReasons.push(`Mật độ từ khóa quan hệ gia đình cao (${familyMatches.length} lần)`);
+    } else if (familyMatches.length >= 3) {
+      storyScore += 3;
+    }
+
+    // E. Mật độ đại từ nhân xưng tự sự ngôi thứ nhất (I, my, me, we, our)
+    const words = rawContent.split(/\s+/).filter(Boolean);
+    const totalWords = words.length;
+    if (totalWords > 0) {
+      const firstPersonMatches = rawContent.match(/\b(i|me|my|myself|we|our|ours|us|tôi|mình)\b/gi) || [];
+      const firstPersonRatio = (firstPersonMatches.length / totalWords) * 100;
+      if (firstPersonRatio >= 2.5) {
+        storyScore += 5;
+        storyReasons.push(`Tỷ lệ đại từ tự sự cao (${firstPersonRatio.toFixed(1)}%)`);
+      } else if (firstPersonRatio >= 1.2) {
+        storyScore += 2;
+      }
+    }
+
+    // F. Có hội thoại nhân vật trong ngoặc kép: “...” hoặc "..."
+    const dialogueMatches = rawContent.match(/["“][^"”]{5,150}["”]/g) || [];
+    if (dialogueMatches.length >= 4) {
+      storyScore += 5;
+      storyReasons.push(`Có nhiều đoạn hội thoại nhân vật (${dialogueMatches.length} câu)`);
+    } else if (dialogueMatches.length >= 1) {
+      storyScore += 2;
+    }
+
+    // G. Dấu ấn cốt truyện / kịch tính (narrative plot markers)
+    const plotMarkers = rawContent.match(/\b(years later|one day|on our wedding day|at the funeral|in the hospital|behind my back|secret compartment|secret letter|inheritance|inherited|left me with|walked out|kicked me out|demanded that|sneered|whispered|confessed|betrayal|uncovered the truth|couldn't believe|tears rolled down|everything changed|bí mật|di chúc|bật khóc|ngày cưới|phát hiện|sự thật)\b/gi) || [];
+    if (plotMarkers.length >= 3) {
+      storyScore += 5;
+      storyReasons.push(`Có nhiều dấu ấn cốt truyện/drama (${plotMarkers.length} dấu ấn)`);
+    } else if (plotMarkers.length >= 1) {
+      storyScore += 2;
+    }
+
+    // --- TÍN HIỆU BÀI VIẾT TIN TỨC (NEWS SIGNALS) ---
+    // A. Chữ ký hãng thông tấn / nhà báo đầu dòng
+    const hasNewsWire = /\b(reuters|associated press|\bap\b|afp|cnn|bbc|bloomberg|fox news|the guardian|ttxvn|vna)\s*[-—–]/i.test(rawContent.slice(0, 500));
+    if (hasNewsWire) {
+      newsScore += 9;
+      newsReasons.push('Chứa chữ ký hãng thông tấn báo chí');
+    }
+
+    // B. Dẫn nguồn quan chức, cảnh sát, người phát ngôn
+    const newsSourceCitations = rawContent.match(/\b(according to (police|officials|reuters|the associated press|ap news|authorities|investigators)|spokesperson (for the|said in a|confirmed to)|during a press (conference|briefing)|officials (confirmed|announced) that|in an official statement)\b/gi) || [];
+    if (newsSourceCitations.length >= 2) {
+      newsScore += 8;
+      newsReasons.push(`Dẫn nguồn phát ngôn báo chí/cảnh sát (${newsSourceCitations.length} lần)`);
+    } else if (newsSourceCitations.length === 1) {
+      newsScore += 4;
+    }
+
+    // C. Tiêu đề chứa thực thể tin tức
+    const titleHardNews = rawTitle.match(/\b(trump|biden|kamala|harris|putin|zelensky|netanyahu|white house|pentagon|supreme court|gop|presidential campaign|ceasefire|airstrike|missile strike|gaza war|russia-ukraine|stock market|dow jones|nasdaq|crypto crash|bitcoin surges?|bầu cử|chính phủ|thủ tướng|tổng thống)\b/gi) || [];
+    if (titleHardNews.length > 0 && !titleFirstPersonFamily) {
+      newsScore += 8;
+      newsReasons.push(`Tiêu đề chứa thực thể tin tức (${titleHardNews.join(', ')})`);
+    }
+
+    // D. Lời khuyên, cẩm nang, listicle tin tức: "How to watch...", "Where to stream...", "Everything you need to know about..."
+    if (/\b(how to watch|where to stream|everything you need to know about|release date, cast|who is .* net worth)\b/i.test(rawTitle)) {
+      newsScore += 8;
+      newsReasons.push('Tiêu đề dạng cẩm nang/tra cứu thông tin (How to watch/Net worth)');
+    }
+
+    // --- ĐÁNH GIÁ TỔNG QUAN ---
+    // 1. Nếu tín hiệu Story vượt trội (storyScore >= 8 và newsScore < 4) -> 100% Story
+    if (storyScore >= 8 && newsScore < 4) {
+      return {
+        isStory: true,
+        isAmbiguous: false,
+        reason: storyReasons.join('; ') || 'Câu chuyện Story hợp lệ',
+        newsScore,
+        storyScore,
+      };
+    }
+
+    // 2. Nếu tín hiệu News rõ rệt (newsScore >= 7 và storyScore < 5) -> 100% News
+    if (newsScore >= 7 && storyScore < 5) {
+      return {
+        isStory: false,
+        isAmbiguous: false,
+        reason: newsReasons.join('; ') || 'Bài viết tin tức thời sự/báo chí',
+        newsScore,
+        storyScore,
+      };
+    }
+
+    // 3. Nếu cả 2 đều thấp hoặc xung đột -> Ambiguous (cần AI xác thực)
+    return {
+      isStory: storyScore >= newsScore,
+      isAmbiguous: true,
+      reason: `Cần xác thực AI (storyScore=${storyScore}, newsScore=${newsScore})`,
+      newsScore,
+      storyScore,
+    };
+  }
+
+  /**
+   * ZTTeam: Kiểm duyệt chất lượng nội dung bài viết câu chuyện trước khi xuất bản.
+   * Đảm bảo không phải trang chuyên mục (như "News"), trang 404/Cloudflare, nội dung quá ngắn,
+   * hoặc các bài viết tin tức thời sự (News) bị lẫn vào website nguồn.
+   */
+  ztteam_validateStoryArticle(
+    title: string,
+    content: string,
+    options?: { url?: string; filterNonStories?: boolean }
+  ): { isValid: boolean; isStory?: boolean; isAmbiguous?: boolean; reason?: string } {
     const trimmedTitle = (title || '').trim();
     const trimmedContent = (content || '').trim();
+    const url = options?.url || '';
+    const filterNonStories = options?.filterNonStories !== false;
 
     /** 1. Kiểm tra tiêu đề */
     if (!trimmedTitle || trimmedTitle.length < 10) {
@@ -321,7 +557,26 @@ export class ZTTeamFetcherService {
       return { isValid: false, reason: `Nội dung không đủ câu hoàn chỉnh (${sentenceCount} câu < 2)` };
     }
 
-    return { isValid: true };
+    /** 4. BỘ LỌC CHUYÊN SÂU STORY VS NEWS (Tự động loại bỏ bài viết tin tức) */
+    if (filterNonStories) {
+      const evaluation = this.ztteam_evaluateStoryVsNews(trimmedTitle, trimmedContent, url);
+      if (!evaluation.isStory && !evaluation.isAmbiguous) {
+        return {
+          isValid: false,
+          isStory: false,
+          reason: `[KHÔNG PHẢI STORY] ${evaluation.reason}`,
+        };
+      }
+      if (evaluation.isAmbiguous) {
+        return {
+          isValid: true,
+          isAmbiguous: true,
+          reason: evaluation.reason,
+        };
+      }
+    }
+
+    return { isValid: true, isStory: true };
   }
 
 
@@ -1230,7 +1485,7 @@ export class ZTTeamFetcherService {
   /**
    * ZTTeam: Lấy danh sách link bài viết từ WordPress REST API (sạch, chuẩn và cực nhanh)
    */
-  async ztteam_fetchWpRestApiPosts(siteUrl: string, pageNum: number = 1, perPage: number = 20): Promise<{ articles: string[]; totalPages: number } | null> {
+  async ztteam_fetchWpRestApiPosts(siteUrl: string, pageNum: number = 1, perPage: number = 20): Promise<{ articles: string[]; postTitles?: Record<string, string>; totalPages: number } | null> {
     try {
       const u = new URL(siteUrl);
       const endpoint = `${u.origin}/wp-json/wp/v2/posts?page=${pageNum}&per_page=${perPage}&_fields=id,link,title`;
@@ -1254,17 +1509,21 @@ export class ZTTeamFetcherService {
 
       const posts = await response.json();
       if (!Array.isArray(posts) || posts.length === 0) {
-        return { articles: [], totalPages };
+        return { articles: [], postTitles: {}, totalPages };
       }
 
       const articles: string[] = [];
+      const postTitles: Record<string, string> = {};
       for (const p of posts) {
         if (p.link) {
           articles.push(p.link);
+          if (p.title?.rendered) {
+            postTitles[p.link] = p.title.rendered;
+          }
         }
       }
 
-      return { articles, totalPages };
+      return { articles, postTitles, totalPages };
     } catch {
       return null;
     }

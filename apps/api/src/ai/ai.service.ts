@@ -1132,4 +1132,81 @@ Story Details:
       localPath,
     };
   }
+
+  /**
+   * ZTTeam: Phân loại thông minh bài viết là Story (Câu chuyện đời thực, gia đình, tình cảm, drama, confession)
+   * hay News (Tin tức thời sự, chính trị, thể thao, chứng khoán, tai nạn, showbiz gossip).
+   */
+  async ztteam_classifyStoryOrNews(
+    title: string,
+    excerpt: string
+  ): Promise<{ isStory: boolean; confidence: number; reason: string }> {
+    const settings = await this.getSettings();
+    if (!settings.openaiKey && !settings.deepseekKey && !settings.geminiKey) {
+      return { isStory: true, confidence: 50, reason: 'Không có API key AI, chấp nhận theo rule mặc định' };
+    }
+
+    const promptText = `You are a strict content classification AI for a Story publishing network (we only publish narrative drama, confessions, family conflicts, emotional tales, Reddit-style stories, and moral fiction).
+Your mission is to classify whether the given article is a STORY or NEWS.
+
+- STORY: Personal narrative, family drama, relationship conflicts, moral life lessons, emotional tales, Reddit-style confessions, fiction, or life experiences.
+- NEWS: Journalism, political updates, government policies, elections, military/war reports, sports games/scores, stock market/financial reports, crypto, local crime/police blotter/accident reporting, celebrity gossip/paparazzi reporting, weather forecasts, product releases, or how-to guides.
+
+Article Title: "${title}"
+Snippet: "${excerpt.slice(0, 1000)}"
+
+Return ONLY valid JSON matching this schema without any markdown wrapping or extra text:
+{
+  "isStory": true or false,
+  "confidence": number between 0 and 100,
+  "reason": "Brief 1-sentence reason"
+}`;
+
+    try {
+      let rawOutput = '';
+      if (settings.activeProvider === 'gemini' && settings.geminiKey) {
+        rawOutput = await this.ztteam_callGeminiWithFallback(settings.geminiKey, promptText, {
+          jsonMode: true,
+          temperature: 0.2,
+        });
+      } else {
+        const OpenAI = require('openai').default;
+        const isDeepseek = settings.activeProvider === 'deepseek' && settings.deepseekKey;
+        const rawKey = isDeepseek ? settings.deepseekKey : settings.openaiKey;
+        const apiKey = (rawKey || '').trim();
+        const baseURL = isDeepseek ? 'https://api.deepseek.com' : undefined;
+        const modelName = isDeepseek ? 'deepseek-chat' : 'gpt-4o-mini';
+
+        if (!apiKey) throw new Error(`Missing API Key for ${settings.activeProvider}`);
+
+        const openai = new OpenAI({ apiKey, baseURL });
+        const response = await Promise.race([
+          openai.chat.completions.create({
+            model: modelName,
+            messages: [
+              { role: 'system', content: 'You are a precise JSON-only content classifier.' },
+              { role: 'user', content: promptText }
+            ],
+            response_format: { type: 'json_object' },
+            max_tokens: 150,
+            temperature: 0.2,
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('AI classification timeout (5s)')), 5000))
+        ]) as any;
+
+        rawOutput = response.choices?.[0]?.message?.content?.trim() || '';
+      }
+
+      const cleanJson = rawOutput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      return {
+        isStory: Boolean(parsed.isStory),
+        confidence: Number(parsed.confidence) || 80,
+        reason: String(parsed.reason || 'AI phân tích'),
+      };
+    } catch (err: any) {
+      this.logger.warn(`AI classification failed or timed out: ${err.message}. Relying on heuristic result.`);
+      return { isStory: true, confidence: 50, reason: `AI error: ${err.message}` };
+    }
+  }
 }

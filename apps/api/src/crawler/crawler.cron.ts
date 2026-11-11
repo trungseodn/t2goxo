@@ -201,8 +201,9 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
     isManualTrigger = false
   ): Promise<{ processedCount: number; freshFoundCount: number; scannedPagesCount: number }> {
     let maxArticlesPerCycle = 1;
-    let maxScanPages = 20; // Mặc định quét sâu tối đa 20 trang phân trang
+    let maxScanPages = 50; // Mặc định quét sâu tối đa 50 trang phân trang
     let keepContentImages = false;
+    let filterNonStories = true; // Mặc định tự động nhận diện và bỏ qua bài viết tin tức
 
     try {
       const rules = JSON.parse(source.extract_rules_json || '{}');
@@ -211,8 +212,13 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
       }
       if (rules.maxScanPages && Number(rules.maxScanPages) > 0) {
         maxScanPages = Math.max(1, Math.min(500, parseInt(rules.maxScanPages, 10)));
+      } else {
+        maxScanPages = 50;
       }
       keepContentImages = Boolean(rules.keepContentImages);
+      if (rules.filterNonStories !== undefined) {
+        filterNonStories = Boolean(rules.filterNonStories);
+      }
     } catch (e) {}
 
     // Ngưỡng gom bài viết mới để đảm bảo kho bài dồi dào, không bị dừng sớm
@@ -226,11 +232,12 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
     let detectedLoadMoreData: any = null;
     let wpRestAvailable: boolean | null = null;
     let wpTotalPages: number | null = null;
+    let wpPostTitles: Record<string, string> = {};
     let isRssSource = false;
     let scannedPagesCount = 0;
 
     this.logger.log(
-      `[Deep Crawler] Bắt đầu quét sâu nguồn: ${source.source_url} (Độ sâu tối đa: ${maxScanPages} trang, Mục tiêu bài/lần: ${maxArticlesPerCycle})`
+      `[Deep Crawler] Bắt đầu quét sâu nguồn: ${source.source_url} (Độ sâu tối đa: ${maxScanPages} trang, Mục tiêu bài/lần: ${maxArticlesPerCycle}, Lọc tin tức: ${filterNonStories ? 'BẬT' : 'TẮT'})`
     );
 
     for (let p = 1; p <= maxScanPages; p++) {
@@ -261,6 +268,9 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
           wpRestAvailable = true;
           wpTotalPages = wpResult.totalPages;
           pageArticles = wpResult.articles;
+          if (wpResult.postTitles) {
+            wpPostTitles = { ...wpPostTitles, ...wpResult.postTitles };
+          }
           this.logger.log(`[Trang ${p}/${maxScanPages}] WP REST API trả về ${pageArticles.length} bài viết (Tổng số trang: ${wpResult.totalPages})`);
         } else if (p === 1) {
           wpRestAvailable = false;
@@ -374,6 +384,22 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
           (history.status === 'SUCCESS' || history.status.startsWith('SKIPPED') || history.status === 'FAILED');
 
         if (!isAlreadyProcessed) {
+          // Bỏ qua sớm các bài viết có tiêu đề hoặc URL thuộc dạng tin tức
+          const titleCandidate = wpPostTitles[url] || '';
+          if (filterNonStories) {
+            const earlyNewsCheck = this.fetcherService.ztteam_isQuickNewsReject(url, titleCandidate);
+            if (earlyNewsCheck.isNews) {
+              this.logger.log(`[TỰ ĐỘNG BỎ QUA TỪ SỚM] Tiêu đề/URL thuộc dạng tin tức (News): "${titleCandidate || url}" (${earlyNewsCheck.reason})`);
+              try {
+                await this.prisma.ztteam_crawl_history.upsert({
+                  where: { source_id_url: { source_id: source.id, url } },
+                  create: { source_id: source.id, url, title: titleCandidate, status: 'SKIPPED_NOT_STORY' },
+                  update: { title: titleCandidate, status: 'SKIPPED_NOT_STORY' },
+                });
+              } catch (e) {}
+              continue;
+            }
+          }
           unCrawledOnThisPage.push(url);
         }
       }
@@ -440,6 +466,7 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
           targetSiteId: source.target_site_id,
           sourceCategory: source.source_category,
           keepContentImages,
+          filterNonStories,
         });
 
         await this.prisma.ztteam_crawl_history.upsert({
@@ -455,15 +482,18 @@ export class ZTTeamCrawlerCron implements OnApplicationBootstrap {
         const isConditionUnmet =
           err.message?.includes('Không phải bài viết hợp lệ') ||
           err.message?.includes('Nội dung không đạt tiêu chuẩn bài viết') ||
-          err.message?.includes('[KHÔNG ĐỦ ĐIỀU KIỆN]');
+          err.message?.includes('[KHÔNG ĐỦ ĐIỀU KIỆN]') ||
+          err.message?.includes('[KHÔNG PHẢI STORY]') ||
+          err.message?.includes('không phải câu chuyện') ||
+          err.message?.includes('tin tức');
 
         if (isConditionUnmet) {
-          this.logger.log(`[TỰ ĐỘNG BỎ QUA] URL không đáp ứng điều kiện: ${url} (${err.message})`);
+          this.logger.log(`[TỰ ĐỘNG BỎ QUA] URL không đáp ứng điều kiện Story: ${url} (${err.message})`);
           try {
             await this.prisma.ztteam_crawl_history.upsert({
               where: { source_id_url: { source_id: source.id, url } },
-              create: { source_id: source.id, url, status: 'SKIPPED_NOT_ARTICLE' },
-              update: { status: 'SKIPPED_NOT_ARTICLE' },
+              create: { source_id: source.id, url, status: 'SKIPPED_NOT_STORY' },
+              update: { status: 'SKIPPED_NOT_STORY' },
             });
           } catch (e) {}
           // Tiếp tục bài viết tiếp theo trong danh sách urlsToFetch đã thu thập

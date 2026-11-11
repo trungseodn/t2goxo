@@ -50,8 +50,9 @@ export default function WordPressSites() {
   const [sourceCategory, setSourceCategory] = useState('');
   const [frequencyCron, setFrequencyCron] = useState('0 */6 * * *');
   const [batchSize, setBatchSize] = useState<number>(1);
-  const [maxScanPages, setMaxScanPages] = useState<number>(20);
+  const [maxScanPages, setMaxScanPages] = useState<number>(50);
   const [keepContentImages, setKeepContentImages] = useState(false);
+  const [filterNonStories, setFilterNonStories] = useState(true);
   const [scanningSourceId, setScanningSourceId] = useState<string | null>(null);
 
   /** Fanpages state */
@@ -211,8 +212,9 @@ export default function WordPressSites() {
     setSourceCategory('');
     setFrequencyCron('0 */6 * * *');
     setBatchSize(1);
-    setMaxScanPages(20);
+    setMaxScanPages(50);
     setKeepContentImages(false);
+    setFilterNonStories(true);
   };
 
   const ztteam_handleEditSource = (source: CrawlSource) => {
@@ -224,12 +226,14 @@ export default function WordPressSites() {
     try {
       const rules = JSON.parse(source.extract_rules_json || '{}');
       setBatchSize(rules.batchSize ? Number(rules.batchSize) : 1);
-      setMaxScanPages(rules.maxScanPages ? Number(rules.maxScanPages) : 20);
+      setMaxScanPages(rules.maxScanPages ? Number(rules.maxScanPages) : 50);
       setKeepContentImages(Boolean(rules.keepContentImages));
+      setFilterNonStories(rules.filterNonStories !== false);
     } catch (e) {
       setBatchSize(1);
-      setMaxScanPages(20);
+      setMaxScanPages(50);
       setKeepContentImages(false);
+      setFilterNonStories(true);
     }
   };
 
@@ -237,18 +241,18 @@ export default function WordPressSites() {
     e.preventDefault();
     const safeMaxScanPages = (typeof maxScanPages === 'number' && !isNaN(maxScanPages) && maxScanPages > 0)
       ? Math.max(1, Math.min(500, maxScanPages))
-      : 20;
+      : 50;
 
     try {
       if (editingSourceId) {
-        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages });
+        await ztteam_updateSource(editingSourceId, { sourceUrl, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages, filterNonStories });
         ztteam_showToast('Cập nhật website nguồn thành công', 'success');
       } else {
         const urls = sourceUrl.split('\n').map(u => u.trim()).filter(u => u);
         let successCount = 0;
         for (const url of urls) {
           try {
-            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages });
+            await ztteam_createSource(siteId, { sourceUrl: url, sourceCategory, frequencyCron, batchSize, keepContentImages, maxScanPages: safeMaxScanPages, filterNonStories });
             successCount++;
           } catch (e) {
             console.error(`Failed to add source ${url}`, e);
@@ -653,7 +657,7 @@ export default function WordPressSites() {
                         </h5>
                         <div className="flex items-center gap-3">
                           <button
-                            onClick={() => { setShowSourceForm(site.id); setEditingSourceId(null); setSourceUrl(''); setSourceCategory(''); setFrequencyCron('0 */6 * * *'); setBatchSize(1); setMaxScanPages(20); }}
+                            onClick={() => { setShowSourceForm(site.id); setEditingSourceId(null); setSourceUrl(''); setSourceCategory(''); setFrequencyCron('0 */6 * * *'); setBatchSize(1); setMaxScanPages(50); setKeepContentImages(false); setFilterNonStories(true); }}
                             className="text-cyan-400 hover:text-cyan-300 text-xs font-bold flex items-center gap-1 uppercase tracking-wide"
                           >
                             <span className="material-symbols-outlined text-base">add_circle</span>
@@ -726,10 +730,31 @@ export default function WordPressSites() {
                               <div className="md:col-span-2">
                                 <label className="flex items-center justify-between p-3.5 bg-fb-surface rounded-2xl cursor-pointer border border-white/5">
                                   <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-fb-text block">Chỉ cào câu chuyện (Bỏ qua bài tin tức)</span>
+                                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Khuyên dùng</span>
+                                    </div>
+                                    <span className="text-[11px] text-fb-text-muted block mt-0.5">Tự động nhận diện và bỏ qua các bài viết thời sự, tin tức chính trị, thể thao, chứng khoán, tai nạn, showbiz... đảm bảo 100% nội dung là câu chuyện đời thực/drama.</span>
+                                  </div>
+                                  <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+                                    <input
+                                      type="checkbox"
+                                      checked={filterNonStories}
+                                      onChange={(e) => setFilterNonStories(e.target.checked)}
+                                      className="sr-only peer"
+                                    />
+                                    <div className="w-9 h-5 bg-fb-surface-hover peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                                  </div>
+                                </label>
+                              </div>
+
+                              <div className="md:col-span-2">
+                                <label className="flex items-center justify-between p-3.5 bg-fb-surface rounded-2xl cursor-pointer border border-white/5">
+                                  <div>
                                     <span className="text-xs font-bold text-fb-text block">Lấy ảnh trong nội dung bài viết</span>
                                     <span className="text-[11px] text-fb-text-muted block mt-0.5">Tải toàn bộ hình ảnh trong thân bài về hosting WordPress của bạn và giữ nguyên vị trí trong bài.</span>
                                   </div>
-                                  <div className="relative inline-flex items-center cursor-pointer">
+                                  <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
                                     <input
                                       type="checkbox"
                                       checked={keepContentImages}
@@ -746,7 +771,7 @@ export default function WordPressSites() {
                                   <div className="flex items-center justify-between gap-3">
                                     <div>
                                       <span className="text-xs font-bold text-fb-text block">Độ sâu phân trang & Load More</span>
-                                      <span className="text-[11px] text-fb-text-muted block mt-0.5">Số trang tối đa bot sẽ quét sâu qua phân trang hoặc nút Load More để vét sạch bài cũ (Mặc định: 20 trang, tối đa: 500 trang).</span>
+                                      <span className="text-[11px] text-fb-text-muted block mt-0.5">Số trang tối đa bot sẽ quét sâu qua phân trang hoặc nút Load More để vét sạch bài cũ (Mặc định: 50 trang, tối đa: 500 trang).</span>
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0">
                                       <input
@@ -760,12 +785,12 @@ export default function WordPressSites() {
                                             setMaxScanPages('' as any);
                                           } else {
                                             const parsed = parseInt(v, 10);
-                                            setMaxScanPages(isNaN(parsed) ? 20 : Math.max(1, Math.min(500, parsed)));
+                                            setMaxScanPages(isNaN(parsed) ? 50 : Math.max(1, Math.min(500, parsed)));
                                           }
                                         }}
                                         onBlur={() => {
                                           if (!maxScanPages || isNaN(Number(maxScanPages))) {
-                                            setMaxScanPages(20);
+                                            setMaxScanPages(50);
                                           }
                                         }}
                                         className="w-20 py-1.5 px-3 rounded-full bg-fb-surface-hover text-fb-text text-xs text-center font-bold focus:outline-none focus:ring-2 focus:ring-fb-blue border border-white/10"
@@ -778,7 +803,7 @@ export default function WordPressSites() {
                                   {/** Các nút chọn nhanh số trang phổ biến */}
                                   <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-white/5">
                                     <span className="text-[10px] text-fb-text-muted font-bold uppercase tracking-wider mr-1">Chọn nhanh:</span>
-                                    {[20, 50, 100, 200, 500].map((preset) => (
+                                    {[50, 20, 100, 200, 500].map((preset) => (
                                       <button
                                         key={preset}
                                         type="button"
@@ -789,7 +814,7 @@ export default function WordPressSites() {
                                             : 'bg-fb-surface-hover/60 text-fb-text-muted hover:text-white border-white/5 hover:bg-fb-surface-hover'
                                         }`}
                                       >
-                                        {preset === 20 ? `${preset} trang (Mặc định)` : `${preset} trang`}
+                                        {preset === 50 ? `${preset} trang (Mặc định)` : `${preset} trang`}
                                       </button>
                                     ))}
                                   </div>
@@ -875,9 +900,26 @@ export default function WordPressSites() {
                                     {(() => {
                                       try {
                                         const r = JSON.parse(source.extract_rules_json || '{}');
-                                        return r.maxScanPages || 20;
-                                      } catch (e) { return 20; }
+                                        return r.maxScanPages || 50;
+                                      } catch (e) { return 50; }
                                     })()} trang
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] text-fb-text-muted uppercase tracking-wider font-extrabold block">LỌC STORY</span>
+                                  <span className="font-bold truncate block">
+                                    {(() => {
+                                      try {
+                                        const r = JSON.parse(source.extract_rules_json || '{}');
+                                        return r.filterNonStories !== false ? (
+                                          <span className="text-cyan-400">Bỏ tin tức</span>
+                                        ) : (
+                                          <span className="text-fb-text-muted">Tắt</span>
+                                        );
+                                      } catch (e) {
+                                        return <span className="text-cyan-400">Bỏ tin tức</span>;
+                                      }
+                                    })()}
                                   </span>
                                 </div>
                                 <div>

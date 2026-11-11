@@ -40,8 +40,8 @@ interface CrawlerState {
   isLoading: boolean;
   error: string | null;
   ztteam_fetchSources: (siteId: string) => Promise<void>;
-  ztteam_createSource: (siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) => Promise<void>;
-  ztteam_updateSource: (sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number }) => Promise<void>;
+  ztteam_createSource: (siteId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number; filterNonStories?: boolean }) => Promise<void>;
+  ztteam_updateSource: (sourceId: string, data: { sourceUrl: string; sourceCategory: string; frequencyCron: string; addLinkToComment?: boolean; batchSize?: number; keepContentImages?: boolean; maxScanPages?: number; filterNonStories?: boolean }) => Promise<void>;
   ztteam_deleteSource: (sourceId: string) => Promise<void>;
   ztteam_toggleSource: (sourceId: string, enabled: boolean) => Promise<void>;
   ztteam_scanSourceNow: (sourceId: string) => Promise<{ success: boolean; message: string; processedCount: number; freshFoundCount: number }>;

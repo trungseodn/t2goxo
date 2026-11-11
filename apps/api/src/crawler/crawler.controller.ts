@@ -45,6 +45,7 @@ export class ZTTeamCrawlerController {
       batchSize?: number;
       keepContentImages?: boolean;
       maxScanPages?: number;
+      filterNonStories?: boolean;
     }
   ) {
     return this.crawlerService.ztteam_createSource(siteId, body);
@@ -67,6 +68,7 @@ export class ZTTeamCrawlerController {
       batchSize?: number;
       keepContentImages?: boolean;
       maxScanPages?: number;
+      filterNonStories?: boolean;
     }
   ) {
     return this.crawlerService.ztteam_updateSource(sourceId, body);
